@@ -1,0 +1,88 @@
+obs_df_MA_SSN <- readRDS("D:/Rprojects/Zenodo/zenodo_FWS_MA_SSN/data/obs_df_MA_SSN.RDS")
+View(obs_df_MA_SSN)
+library(foreign)
+library(sf)
+# library(leaflet)
+library(elevatr)
+library(terra)
+library(purrr)
+library(spData)  # for US states polygons data(us_states, package = "spData")
+library(mapdata)
+library(usmap)
+library(basemaps)
+library(ggspatial)
+library(ggtext)
+library(ggridges)
+library(GGally)
+library(cowplot)
+library(viridisLite)
+# Linked micromaps dependencies
+library(micromap)
+library(RColorBrewer)
+library(rmapshaper)
+library(grid)
+library(gridExtra)
+library(gridGraphics)
+library(ggplotify)
+library(grDevices)
+# only need to run 'extrafont' code once for each version of R installed
+library(extrafont)#; font_import()
+loadfonts(device = "postscript")
+# loadfonts(device = "win")
+# library(devtools); install_github("USEPA/SSN2", dependencies=TRUE, force=FALSE)
+# remotes::install_github("USEPA/SSN2", ref = "develop",
+#                         dependencies=TRUE, force = FALSE)
+library(SSN2)
+# last to supersede any other data wrangling fnxs in previously loaded packages
+library(tidyverse)
+threshold_temp_max <- 30
+# observation and prediction site geospatial data
+obs_df <- readRDS("../data/obs_df_MA_SSN.RDS")
+# number of unique sites for july data
+july_year_count_plot <-
+obs_df |>
+# july_data00 |>
+reframe(.by = stn_id_num, year_n = n()) |>
+ggplot(aes(x = year_n)) +
+geom_density() +
+theme_classic() +
+scale_x_continuous(n.breaks = 7) +
+labs(x = "Record length for a site (years)",
+# title = "Observation sites by record length density",
+y = "Site density")
+# number of unique sites for july data
+july_year_count_plot <-
+obs_df |> st_drop_geometry() |>
+# july_data00 |>
+reframe(.by = stn_id_num, year_n = n()) |>
+ggplot(aes(x = year_n)) +
+geom_density() +
+theme_classic() +
+scale_x_continuous(n.breaks = 7) +
+labs(x = "Record length for a site (years)",
+# title = "Observation sites by record length density",
+y = "Site density")
+# plot density of temperature data for years used in model fit
+data_density_by_year_plot <-
+ggplot(data = july_data00) +
+geom_density(aes(x = smpl_year)) +
+theme_classic() +
+scale_x_continuous(n.breaks = 7) +
+labs(x = "Year",
+# title = "Observation site records per year density",
+y = "Site density")
+# plot density of temperature data for years used in model fit
+data_density_by_year_plot <-
+ggplot(data = obs_df) +
+geom_density(aes(x = smpl_year)) +
+theme_classic() +
+scale_x_continuous(n.breaks = 7) +
+labs(x = "Year",
+# title = "Observation site records per year density",
+y = "Site density")
+(observation_data_panel_plot <-
+cowplot::plot_grid(data_density_by_year_plot,july_year_count_plot,
+nrow = 2,labels = c("A","B")) )
+continuous_obs_vars <- readRDS("D:/Rprojects/Zenodo/zenodo_FWS_MA_SSN/data/continuous_obs_vars.RDS")
+View(continuous_obs_vars)
+gc()

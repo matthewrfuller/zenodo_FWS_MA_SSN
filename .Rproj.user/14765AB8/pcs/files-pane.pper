@@ -1,0 +1,13 @@
+{
+    "sortOrder": [
+        {
+            "columnIndex": 3,
+            "ascending": false
+        },
+        {
+            "columnIndex": 2,
+            "ascending": true
+        }
+    ],
+    "path": "D:/Rprojects/Zenodo/zenodo_FWS_MA_SSN/ssnobj/MASSN_july_standardized.ssn"
+}

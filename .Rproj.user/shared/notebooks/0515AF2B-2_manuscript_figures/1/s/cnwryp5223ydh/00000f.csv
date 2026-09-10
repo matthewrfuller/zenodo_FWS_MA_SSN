@@ -1,0 +1,6 @@
+"0","ggsave(plot = fig1_panel, width = 6.5, height = 9, units = ""in"","
+"0","       dpi = 600, filename = ""../figures/Figure1_studyarea_and_dem.png"")"
+"0",""
+"0","ggsave(plot = fig1_panel, width = 6.5, height = 9, units = ""in"","
+"0","       device = cairo_ps,"
+"0","       dpi = 600, filename = ""../figures/Figure1_studyarea_and_dem.eps"")"

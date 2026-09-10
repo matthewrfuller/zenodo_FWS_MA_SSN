@@ -1,0 +1,41 @@
+---
+title: "Data Download"
+author: "Matt Fuller"
+date: "2024-02-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# install.packages("remotes")
+# remotes::install_github('DOI-USGS/geoknife')
+library(terra)
+library(sf)
+library(tidyverse)
+library(geoknife)
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## geoknife package tutorial  
+
+Set the boundaries for the data to be downloaded.  
+
+```{r}
+stencil <- webgeom('state::Massachusetts')
+```
+
+Set the data source for downloading.  
+
+```{r}
+fabric <- webdata(list(times = as.POSIXct(c('1990-01-01','2005-12-31')),
+                       url = 'https://cida.usgs.gov/thredds/dodsC/cmip5_bcsd/future_1.html',
+                       variables = 
+                       )
+                  )
+```
+
+
+```{r}
+job <- geoknife(stencil, fabric, wait = TRUE)
+```
+

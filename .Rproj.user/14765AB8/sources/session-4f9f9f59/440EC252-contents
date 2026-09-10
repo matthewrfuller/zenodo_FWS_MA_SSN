@@ -1,0 +1,1096 @@
+---
+title: "02_SSN_object_prep"
+output:
+  html_document: default
+  pdf_document: default
+date: "2023-07-12"
+---
+
+# Set up the global environment  
+
+Load necessary libraries for analysis.  
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(magrittr)
+# library(devtools);install_github("michaeldumelle/SSN2temp2",dependencies = TRUE)
+library(SSN2temp2)
+library(foreign)
+library(padr)
+library(zoo)
+library(pander)
+library(sf)
+
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "../")
+```
+
+# Functions for SSN model evaluations  
+
+Source personal functions written to help with SSN model selection and evaluations.  
+
+
+```{r functions sourcing}
+# Function to standardize variables
+source(file = "../scripts/helperfnx/ssn_standardize_variables_function.R")
+
+# Function to standardize a prediction data set based on the fitting data set
+source(file = "../scripts/helperfnx/ssn_standardize_prediction_variables_function.R")
+
+# Get raw and standardized fixed effects and SEs from glmssn
+# source(file = "../scripts/helperfnx/ssn_extract_model_covariate_estimate_table_from_fitted_glmssn_function.R")
+
+# get a subset of the results from the SSN InfoCritCompare() SSN package func
+# source(file = "../scripts/helperfnx/ssn_subset_of_InfoCritCompare_results_function.R")
+
+# Full Diagnostics results gathered from fitted a glmssn 
+# source(file = "../scripts/helperfnx/ssn_diagnostic_statistics_function.R")
+
+# partial diagnostics results gathered from a fitted glmssn
+# source(file = "../scripts/helperfnx/ssn_diag_fnx.R")
+
+# backtransformation function for generating estimate table
+source(file = "../scripts/helperfnx/ssn_backtransformation_fnx.R")
+
+# formula combination functions
+source(file = "../scripts/helperfnx/ssn_formula_all_combo_function.R")
+```
+
+
+# Read in data  
+
+## SSN Object (.ssn)  
+
+Read in the SSN object and prediction sites contained in the "preds" predictions slot of the SSN object.  
+
+
+```{r import ssn obj, cache=TRUE}
+# ~2 min to load
+ssn_obj <- ssn_import(path = paste0(dirname(getwd()),"/ssnobj/lsn_july.ssn"), 
+                      predpts = "preds10288.shp" )
+```
+
+Create the network-wise distance matrix between all observation and prediction sites.  
+
+```{r create distance matrix, cache=TRUE}
+ssn_create_distmat(ssn_obj, predpts = "preds10288", 
+                   overwrite =T, among_predpts = TRUE)  # < 1 min
+```
+
+
+Plot the ssn object network and observation points.  
+
+```{r plot ssn object network and observation sites}
+(ssn_obj_plot <-ggplot() +
+    geom_sf(data = ssn_obj$edges) +
+    geom_sf(data = ssn_obj$preds$preds10288,
+            aes(color = "Preds"), size = 0.5, shape = 16,
+            show.legend = TRUE ) +
+    geom_sf(data = ssn_obj$obs,
+            aes(color = "Obs"), size = 1.5, shape = 16,
+            show.legend = TRUE
+    ) +
+    theme_bw() + 
+    
+    labs(x = "Longitude", y = "Latitude", color = "Sites",
+         title = "Massachusetts network and site locations") +
+    scale_color_manual(values = c("Obs" = "blue","Preds" = "pink"), 
+                       guide = guide_legend(override.aes = list(size = c(2,1)))) 
+)
+
+ggsave(plot = ssn_obj_plot, 
+       filename = "../figures/SSN_network_obs_sites_map.png",
+       width = 6.5, height = 4.5, units = "in", dpi = 300)
+```
+
+
+##  Observation site temperature data  
+
+Below contains the mean monthly temp data that can be joined to the observation site (obs) data in the ssn object along with the covariate data.
+
+```{r read in observation temp data}
+july_data00 <- 
+   read_csv(file = "../data/obs_july_avg_df.csv", col_types = "nffinnnnnnn")
+```
+
+Generate range of years covered by the monthly data as well as the a plot of the density of data from each year.  
+
+```{r temporal coverage of observation data, fig.width=6.5, fig.height=4.5}
+# what range of years were selected from random slice of site-year combos
+range(july_data00$smpl_year)
+
+# plot density of temperature data for years used in model fit
+(data_density_by_year_plot <-
+  ggplot(data = july_data00) +
+  geom_density(aes(x = smpl_year)) + 
+  theme_bw() +
+  scale_x_continuous(n.breaks = 7) +
+  labs(x = "Year", title = "Observation site year density plot")  )
+
+ggsave(plot = data_density_by_year_plot, 
+       filename = "../figures/obs_data_density_by_year.png",
+       width = 6.5, height = 4.5, units = "in", dpi = 300)
+```
+
+
+## Covariate data  
+
+```{r read in covariate data from XGBoost model flowlines, warnings = FALSE, message=FALSE}
+cov_data00 <- read_csv(file = "../data/mastath-flowlines.csv") %>%
+  select(-BASIN_ID, -BASIN, -HUC8, 
+         -starts_with("TEMP_"), -starts_with("TAIR_SUM"))  %>%
+  # mutate(BASIN_ID = as.factor(BASIN_ID),
+  #        BASIN = as.factor(BASIN),
+  #        HUC8 = as.factor(HUC8)) %>%
+  filter(!is.na(TOT_NLCD11_WATER))
+
+
+```
+
+
+
+```{r explore covariate data, fig.width=11, fig.height=11, warning=FALSE}
+# identifies if there are any infinite or NA values in the data frame
+names(cov_data00)[apply(cov_data00, 2, function(x) any(is.na(x) | is.infinite(x)))]
+# should be "character(0)" if the data have zero NAs, Inf, or -Inf values
+
+# Explore correlations among covariates to detect multicollinearity issues
+cov_corr_mtx <- cov_data00  %>% 
+    select(-where(is.factor), -COMID) %>% 
+  cor()
+  
+
+corpplot <- {
+  corrplot::corrplot.mixed(corr = cov_corr_mtx, 
+                           lower = "number", upper = "ellipse", diag = c("n"),
+                           tl.pos = c("lt"), tl.cex = 0.75, tl.col = 1, 
+                           title = "XGBoost Covariate Correlations",
+                           mar = c(0,0,3,0),
+                           number.digits = 1, number.cex = 0.4,
+                           lower.col = rev(corrplot::COL2('RdBu', 200)),
+                           upper.col = rev(corrplot::COL2('RdBu', 200)),
+                           cl.cex = 0.5, cl.align.text = "r")
+  
+  recordPlot()
+}
+
+ggsave(filename = "../figures/XGBoost_corrplot.png", 
+       plot = replayPlot(corpplot), 
+       width = 11, height = 11, units = "in", bg = NA, dpi = 300)
+```
+
+```{r filtered corrplot, fig.width=11, fig.height=11, warning=FALSE}
+cov_corr_mtx_filtered <- 
+  cov_corr_mtx[cov_corr_mtx >= -0.65 & cov_corr_mtx <= 0.65] <- NA
+
+corpplotfiltered <- {
+  # par(mai = c(0.5,2,2,0.5),
+  #     mar = c(0,0,0,0))
+  corrplot::corrplot.mixed(corr = cov_corr_mtx, 
+                           lower = "number", upper = "ellipse", diag = c("n"),
+                           tl.pos = c("lt"), tl.cex = 0.75, tl.col = 1, 
+                           title = "XGBoost Covariate Correlations Filtered (|r| > 0.65)",
+                           number.digits = 1, number.cex = 0.4,
+                           lower.col = rev(corrplot::COL2('RdBu', 200)),
+                           upper.col = rev(corrplot::COL2('RdBu', 200)),
+                           na.label = "square", na.label.col = "grey92",
+                           mar = c(0,0,3,0),
+                           cl.cex = 0.5, cl.align.text = "r")
+  
+  recordPlot()
+}
+
+ggsave(filename = "../figures/XGBoost_corrplot_filtered.png", 
+       plot = replayPlot(corpplotfiltered), 
+       width = 11, height = 11, units = "in", bg = NA, dpi = 300)
+```
+
+
+### Histograms  
+
+ 
+
+```{r histograms, fig.height=12, fig.width=12}
+cov_data_long <- cov_data00 %>% 
+  pivot_longer(cols = -COMID, names_to = "Covariate", values_to = "Measurement")
+
+(gg_histograms <- ggplot(data = cov_data_long,
+                         aes(x = Measurement)) +
+   geom_histogram(binwidth = 
+                    function(x){(diff(range(x)))/(ceiling(sqrt(length(x))))} 
+                  ) + 
+   theme_bw() +
+   facet_wrap(~Covariate, scales = "free")
+)
+```
+
+
+### Q-Q plots  
+
+   
+
+```{r qqplots, , fig.height=12, fig.width=12}
+(gg_qq <- ggplot(data = cov_data_long,
+                 aes(sample = Measurement)) +
+   geom_qq() + 
+   theme_bw() +
+   facet_wrap(~Covariate, scales = "free")
+)
+```
+
+
+
+## Standardize observation covariate data  
+
+Extract observation site data frame from SSN object and join to temperature data for the month.  
+
+
+```{r ssn obs site data frame}
+ssn_obs_df00 <- ssn_get_data(ssn_obj, name = "obs") %>%
+  left_join(x = .,
+            select(july_data00, ssnid, station_id, stn_id_num, comid),
+            by = "ssnid") %>%
+  mutate(yearf = factor(smpl_year)) %>%
+  # mutate(locID = stn_id_num) %>% droplevels() %>%
+  left_join(., cov_data00, by = c("comid" = "COMID"))  %>%
+  mutate(TOT_TAV7_0C_JUL = TOT_TAV7100_JUL,
+         TOT_TAV7_2C_JUL = TOT_TAV7100_JUL,
+         TOT_TAV7_4C_JUL = TOT_TAV7100_JUL,
+         TOT_TAV7_6C_JUL = TOT_TAV7100_JUL,
+         TOT_TAV7_8C_JUL = TOT_TAV7100_JUL)
+
+ssn_obs_df01 <- ssn_obs_df00  %>% st_drop_geometry()  
+
+# identifies if there are any infinite or NA values in the data frame
+# names(ssn_obs_df01)[apply(ssn_obs_df01, 2, function(x) any(is.na(x) | is.infinite(x)))]
+# should be "character(0)" if the data have zero NAs, Inf, or -Inf values
+```
+
+
+Standardize the continuous variables used in the model fit so their estimated coefficients can be compared directly.  
+
+
+```{r standardize_continuous_variables}
+# select the continuous variable names from the covariate data frame
+continuous_var_names <- names(select(ssn_obs_df01, starts_with("TOT")) )
+
+# extract the continuous data columns
+cont_cov_data <- 
+  dplyr::select(ssn_obs_df01, all_of(continuous_var_names))  
+
+# apply the "stand()" function across all columns to standardize each covariate
+cont_cov_data_stdzd <- apply(cont_cov_data,2,stand)
+
+# add prefix ("s_") to standardized column names
+colnames(cont_cov_data_stdzd) <- paste0("s_", continuous_var_names)
+
+# join standardized data to original data frame
+ssn_obs_df01_stdzd <- bind_cols(ssn_obs_df00, cont_cov_data_stdzd)
+```
+
+
+A set of observed station data is set aside from the model fitting process to be used as a validation test data set after a model has been selected. We do this by setting the validation data temperature measurements equal to NA in the ssn object so that they are not included in the model fitting process.
+
+```{r}
+
+```
+
+
+
+```{r return obs data to ssn object}
+# put the data frame with standardized columns back into the ssn object
+ssn_obj_stdzd <- ssn_put_data(ssn_obs_df01_stdzd, ssn_obj, "obs")
+```
+
+
+
+### Plot temp vs drainage area  
+
+```{r Obs temp by watershed plot, fig.cap="Observation site data years from random sample of site-year combinations for any sites that had multiple years of data available."}
+
+# plot watershed area vs temperature
+ggplot() +
+   geom_point(data = ssn_obs_df01_stdzd,
+              aes(x = TotAreaKm2, y = avg_mean_W)) +
+   theme_bw() +
+   scale_x_log10() +
+   labs(x = "Watershed Area (km²)", 
+        y = "Water temperature (°C)",
+        title = "Observation site watershed area by water temperature")
+
+```
+
+
+### Fit aspatial model  
+
+Fit an aspatial model.  
+
+```{r fit_general_aspatial_model}
+# Extract dataframe and fit basic aspatial model with un-standardized predictors
+ssn_obj_lm <-
+  lm(avg_mean_W ~ 
+       s_TOT_CNPY11_BUFF100 +
+       s_TOT_ELEV_MEAN +
+       # s_TOT_STREAM_SLOPE +
+       s_TOT_BASIN_SLOPE +
+       s_TOT_BFI +
+       s_TotAreaKm2 +
+       
+       s_TOT_NLCD11_WATER +
+       
+       s_TOT_NID_STORAGE2013 +
+       # s_TOT_NDAMS2013 + 
+       # s_TOT_NORM_STORAGE2013 +
+       # s_TOT_MAJOR2013 +
+       
+       s_TOT_STREAM_LENGTH +
+       s_TOT_TAV7100_JUL, 
+     data=ssn_obs_df01_stdzd)
+
+summary(ssn_obj_lm)
+
+plot(ssn_obj_lm)
+
+# VIF values ordered largest to smallest. Values greater than 2 are problematic
+(vif_values <- 
+    car::vif(ssn_obj_lm) %>%
+  data.frame()  %>% rownames_to_column() %>% 
+  rename(FixedEffect = "rowname", vif = ".") %>%
+  arrange(desc(vif))
+)
+```
+
+## Standardize prediction data  
+
+
+
+```{r read in and preprocess prediction data}
+# extract the prediction site data from the ssn object
+ssn_preds_df00 <- ssn_get_data(x = ssn_obj_stdzd, name = "preds10288") %>%
+  left_join(., y = cov_data00, by = c("COMID" = "COMID")) %>%
+  mutate(stn_id_num = as.factor(pid),
+         yearf = factor(2016))  %>%
+  mutate(TOT_TAV7_0C_JUL = TOT_TAV7100_JUL,
+         TOT_TAV7_2C_JUL = TOT_TAV7100_JUL+2,
+         TOT_TAV7_4C_JUL = TOT_TAV7100_JUL+4,
+         TOT_TAV7_6C_JUL = TOT_TAV7100_JUL+6,
+         TOT_TAV7_8C_JUL = TOT_TAV7100_JUL+8)
+
+ssn_preds_df01 <- ssn_preds_df00 %>% st_drop_geometry() 
+
+
+# identifies if there are any infinite or NA values in the data frame
+names(ssn_preds_df01)[apply(ssn_preds_df01, 
+                            2, 
+                            function(x) any(is.na(x) | is.infinite(x)))]
+# should be "character(0)" if the data have zero NAs, Inf, or -Inf values
+
+# preds_na_comid_df <- 
+#   data.frame(COMIDNA = sort(ssn_preds_df01$COMID[is.na(ssn_preds_df01$TOT_BFI)]) )
+# write.dbf(preds_na_comid_df, file = "../data/preds_na_comid.dbf")
+```
+
+
+```{r standardize the predictions}
+# extract the continuous data columns
+cont_cov_data_preds <- dplyr::select(ssn_preds_df01, all_of(continuous_var_names))
+
+# use the "stdpreds()" function to standardize each prediction covariate
+# based on the observation data for each covariate in the fitted model
+cont_cov_data_preds_stdzd <- stdpreds(cont_cov_data_preds, cont_cov_data)
+
+# add prefix ("s_") to standardized column names
+colnames(cont_cov_data_preds_stdzd) <- paste0("s_", continuous_var_names)
+
+# join standardized data to original data frame
+ssn_preds_df01_stdzd <- bind_cols(ssn_preds_df00,cont_cov_data_preds_stdzd)  
+
+# put the data frame with standardized columns back into the ssn object
+ssn_obj_op_stdzd <-
+  ssn_put_data(ssn_preds_df01_stdzd, ssn_obj_stdzd, name = "preds10288")  
+
+# write out the prediction site covariate input data
+write_csv(ssn_preds_df01_stdzd, file =  "../tables/input_data_preds.csv" )
+```
+
+
+```{r}
+# ssn_write(ssn = ssn_obj_op_stdzd, path = "../ssnobj/MASSN_july.ssn", 
+#           overwrite = TRUE, copy_dist = TRUE)
+```
+
+
+# Fit SSN models   
+
+## Fit competing model structures  
+
+
+```{r fit00 ssn model, cache=TRUE}
+(fit00_start <- Sys.time())
+# ssn_fit00 <- 
+#   SSN::glmssn(
+#     formula = avg_mean_W ~
+#       s_TOT_CNPY11_BUFF100 +
+#       s_TOT_ELEV_MEAN +
+#       s_TOT_STREAM_SLOPE +
+#       # s_TOT_BASIN_SLOPE +
+#       s_TOT_BFI +
+#       s_TotAreaKm2 +
+# 
+#       s_TOT_NLCD11_WATER +
+# 
+#       # s_TOT_NID_STORAGE2013 +
+#       s_TOT_NDAMS2013 +
+#       # s_TOT_NORM_STORAGE2013 +
+#       # s_TOT_MAJOR2013 +
+# 
+#       # s_TOT_STREAM_LENGTH +
+#       s_TOT_TAV7100_JUL,
+# 
+#     ssn.object = ssn_obj_op_stdzd,
+#     EstMeth= "ML", family="gaussian",
+#     addfunccol = "afvArea",
+#     CorModels=c("stn_id_num", "yearf",
+#                 "Exponential.tailup",
+#                 "Exponential.taildown",
+#                 "Exponential.Euclid"))
+
+ssn_fit00 <- ssn_lm(
+  formula = avg_mean_W ~ 
+    s_TOT_CNPY11_BUFF100 +
+    s_TOT_ELEV_MEAN +
+    s_TOT_STREAM_SLOPE +
+    # s_TOT_BASIN_SLOPE + 
+    s_TOT_BFI +
+    s_TotAreaKm2 +
+    
+    s_TOT_NLCD11_WATER +
+    
+    # s_TOT_NID_STORAGE2013 +
+    s_TOT_NDAMS2013 + 
+    # s_TOT_NORM_STORAGE2013 +
+    # s_TOT_MAJOR2013 +
+    
+    # s_TOT_STREAM_LENGTH +
+    s_TOT_TAV7100_JUL,
+  ssn.object = ssn_obj_op_stdzd,
+  tailup_type = "exponential",
+  taildown_type = "exponential",
+  euclid_type = "exponential",
+  random = ~ stn_id_num + yearf,
+  additive = "afvArea",
+  estmethod = "ml"
+)
+(fit00_end <- Sys.time()); (fit00_time <- fit00_end - fit00_start)
+
+
+(var_comp_out00 <- varcomp(ssn_fit00) %>% 
+    mutate(Proportion = round(proportion, 2) ) )
+
+(modfit00_stats <- glance(ssn_fit00))
+
+(fit00_esttab <- tidy(ssn_fit00))
+
+(loocv_fit00 <- loocv(ssn_fit00))
+
+summary(ssn_fit00)
+```
+
+
+```{r fit01 ssn model, cache=TRUE}
+(fit01_start <- Sys.time())
+ssn_fit01 <- 
+  SSN::glmssn(avg_mean_W ~ 
+                s_TOT_CNPY11_BUFF100 +
+                s_TOT_ELEV_MEAN +
+                # s_TOT_STREAM_SLOPE +
+                s_TOT_BASIN_SLOPE +
+                s_TOT_BFI +
+                s_TotAreaKm2 +
+                
+                s_TOT_NLCD11_WATER +
+                
+                # s_TOT_NID_STORAGE2013 +
+                s_TOT_NDAMS2013 + 
+                # s_TOT_NORM_STORAGE2013 +
+                # s_TOT_MAJOR2013 +
+                
+                # s_TOT_STREAM_LENGTH +
+                s_TOT_TAV7100_JUL, 
+              
+              ssn.object = ssn_obj_op_stdzd,
+              EstMeth= "ML", family="gaussian", 
+              addfunccol = "afvArea",
+              CorModels=c("stn_id_num", "yearf",
+                          "Exponential.tailup",
+                          "Exponential.taildown",
+                          "Exponential.Euclid"))
+(fit01_end <- Sys.time()); (fit01_time <- fit01_end - fit01_start)
+
+
+(var_comp_fit01 <- varcomp(ssn_fit01) %>% 
+   mutate(Proportion = round(Proportion, 2) ) )
+
+(fit01_diagnostics <- diag_fnx(ssn_fit01) )
+
+(fit01_esttab <- estimate_table_from_glmssn_obj(ssn_fit01, cont_cov_data,5)  %>%
+  arrange(desc(abs(Std_Est))) )
+
+loocv_fit01 <- residuals.glmssn(ssn_fit01, cross.validation = TRUE)
+
+summary(ssn_fit01)
+```
+
+
+
+```{r fit02 ssn model, cache=TRUE}
+(fit02_start <- Sys.time())
+ssn_fit02 <- 
+  SSN::glmssn(avg_mean_W ~ 
+                s_TOT_CNPY11_BUFF100 +
+                s_TOT_ELEV_MEAN +
+                s_TOT_STREAM_SLOPE +
+                # s_TOT_BASIN_SLOPE +
+                s_TOT_BFI +
+                s_TotAreaKm2 +
+                
+                s_TOT_NLCD11_WATER +
+                
+                s_TOT_NID_STORAGE2013 +
+                # s_TOT_NDAMS2013 + 
+                # s_TOT_NORM_STORAGE2013 +
+                # s_TOT_MAJOR2013 +
+                
+                # s_TOT_STREAM_LENGTH +
+                s_TOT_TAV7100_JUL, 
+              
+              ssn.object = ssn_obj_op_stdzd,
+              EstMeth= "ML", family="gaussian", 
+              addfunccol = "afvArea",
+              CorModels=c("stn_id_num", "yearf",
+                          "Exponential.tailup",
+                          "Exponential.taildown",
+                          "Exponential.Euclid"))
+(fit02_end <- Sys.time()); (fit02_time <- fit02_end - fit02_start)
+
+
+(var_comp_fit02 <- varcomp(ssn_fit02) %>% 
+   mutate(Proportion = round(Proportion, 2) ) )
+
+(fit02_diagnostics <- diag_fnx(ssn_fit02) )
+
+(fit02_esttab <- estimate_table_from_glmssn_obj(ssn_fit02, cont_cov_data,5)  %>%
+  arrange(desc(abs(Std_Est))) )
+
+loocv_fit02 <- residuals.glmssn(ssn_fit02, cross.validation = TRUE)
+
+summary(ssn_fit02)
+```
+
+
+
+```{r fit03 ssn model, cache=TRUE}
+(fit03_start <- Sys.time())
+ssn_fit03 <- 
+  SSN::glmssn(avg_mean_W ~ 
+                s_TOT_CNPY11_BUFF100 +
+                s_TOT_ELEV_MEAN +
+                # s_TOT_STREAM_SLOPE +
+                s_TOT_BASIN_SLOPE +
+                s_TOT_BFI +
+                s_TotAreaKm2 +
+                
+                s_TOT_NLCD11_WATER +
+                
+                s_TOT_NID_STORAGE2013 +
+                # s_TOT_NDAMS2013 + 
+                # s_TOT_NORM_STORAGE2013 +
+                # s_TOT_MAJOR2013 +
+                
+                # s_TOT_STREAM_LENGTH +
+                s_TOT_TAV7100_JUL, 
+              
+              ssn.object = ssn_obj_op_stdzd,
+              EstMeth= "ML", family="gaussian", 
+              addfunccol = "afvArea",
+              CorModels=c("stn_id_num", "yearf",
+                          "Exponential.tailup",
+                          "Exponential.taildown",
+                          "Exponential.Euclid"))
+(fit03_end <- Sys.time()); (fit03_time <- fit03_end - fit03_start)
+
+
+(var_comp_fit03 <- varcomp(ssn_fit03) %>% 
+   mutate(Proportion = round(Proportion, 2) ) )
+
+(fit03_diagnostics <- diag_fnx(ssn_fit03) )
+
+(fit03_esttab <- estimate_table_from_glmssn_obj(ssn_fit03, cont_cov_data,5)  %>%
+  arrange(desc(abs(Std_Est))) )
+
+loocv_fit03 <- SSN::residuals.glmssn(ssn_fit03, cross.validation = TRUE)
+
+summary(ssn_fit03)
+```
+
+
+
+
+```{r fit04 ssn model, cache=TRUE}
+(fit04_start <- Sys.time())
+ssn_fit04 <- 
+  SSN::glmssn(avg_mean_W ~ 
+                s_TOT_CNPY11_BUFF100 +
+                s_TOT_ELEV_MEAN +
+                # s_TOT_STREAM_SLOPE +
+                s_TOT_BASIN_SLOPE +
+                s_TOT_BFI +
+                s_TotAreaKm2 +
+                
+                s_TOT_NLCD11_WATER +
+                
+                # s_TOT_NID_STORAGE2013 +
+                # s_TOT_NDAMS2013 + 
+                s_TOT_NORM_STORAGE2013 +
+                # s_TOT_MAJOR2013 +
+                
+                # s_TOT_STREAM_LENGTH +
+                s_TOT_TAV7100_JUL, 
+              
+              ssn.object = ssn_obj_op_stdzd,
+              EstMeth= "ML", family="gaussian", 
+              addfunccol = "afvArea",
+              CorModels=c("stn_id_num", "yearf",
+                          "Exponential.tailup",
+                          "Exponential.taildown",
+                          "Exponential.Euclid"))
+(fit04_end <- Sys.time()); (fit04_time <- fit04_end - fit04_start)
+
+
+(var_comp_fit04 <- varcomp(ssn_fit04) %>% 
+   mutate(Proportion = round(Proportion, 2) ) )
+
+(fit04_diagnostics <- diag_fnx(ssn_fit04) )
+
+(fit04_esttab <- estimate_table_from_glmssn_obj(ssn_fit04, cont_cov_data,5)  %>%
+  arrange(desc(abs(Std_Est))) )
+
+loocv_fit04 <- SSN::residuals.glmssn(ssn_fit04, cross.validation = TRUE)
+
+summary(ssn_fit04)
+```
+
+
+
+
+
+```{r fit05 ssn model, cache=TRUE}
+(fit05_start <- Sys.time())
+ssn_fit05 <- 
+  SSN::glmssn(avg_mean_W ~ 
+                s_TOT_CNPY11_BUFF100 +
+                s_TOT_ELEV_MEAN +
+                # s_TOT_STREAM_SLOPE +
+                s_TOT_BASIN_SLOPE +
+                s_TOT_BFI +
+                s_TotAreaKm2 +
+                
+                s_TOT_NLCD11_WATER +
+                
+                # s_TOT_NID_STORAGE2013 +
+                # s_TOT_NDAMS2013 + 
+                # s_TOT_NORM_STORAGE2013 +
+                s_TOT_MAJOR2013 +
+                
+                # s_TOT_STREAM_LENGTH +
+                s_TOT_TAV7100_JUL, 
+              
+              ssn.object = ssn_obj_op_stdzd,
+              EstMeth= "ML", family="gaussian", 
+              addfunccol = "afvArea",
+              CorModels=c("stn_id_num", "yearf",
+                          "Exponential.tailup",
+                          "Exponential.taildown",
+                          "Exponential.Euclid"))
+(fit05_end <- Sys.time()); (fit05_time <- fit05_end - fit05_start)
+
+
+(var_comp_fit05 <- varcomp(ssn_fit05) %>% 
+   mutate(Proportion = round(Proportion, 2) ) )
+
+(fit05_diagnostics <- diag_fnx(ssn_fit05) )
+
+(fit05_esttab <- estimate_table_from_glmssn_obj(ssn_fit05, cont_cov_data,5)  %>%
+  arrange(desc(abs(Std_Est))) )
+
+loocv_fit05 <- SSN::residuals.glmssn(ssn_fit05, cross.validation = TRUE)
+
+summary(ssn_fit05)
+```
+
+
+
+
+```{r fit06 ssn model, cache=TRUE}
+(fit06_start <- Sys.time())
+
+ssn_fit06 <- ssn_lm(
+  formula = avg_mean_W ~ 
+    s_TOT_CNPY11_BUFF100 +
+    s_TOT_ELEV_MEAN +
+    # s_TOT_STREAM_SLOPE +
+    s_TOT_BASIN_SLOPE +
+    s_TOT_BFI +
+    
+    s_TotAreaKm2 +
+    s_TOT_STREAM_LENGTH +
+    
+    s_TOT_NLCD11_WATER +
+    
+    s_TOT_NID_STORAGE2013 +
+    # s_TOT_NDAMS2013 + 
+    # s_TOT_NORM_STORAGE2013 +
+    # s_TOT_MAJOR2013 +
+    
+    s_TOT_TAV7100_JUL,
+  ssn.object = ssn_obj_op_stdzd,
+  tailup_type = "exponential",
+  taildown_type = "exponential",
+  euclid_type = "exponential",
+  random = ~ yearf + stn_id_num,
+  # random = ~ (1 + smpl_year | stn_id_num),
+  # random = ~ (1 | smpl_year) + (1 | stn_id_num),
+  additive = "afvArea",
+  estmethod = "ml")
+
+(fit06_end <- Sys.time()); (fit06_time <- fit06_end - fit06_start)
+
+
+(var_comp_fit06 <- varcomp(ssn_fit06) %>% 
+   mutate(Proportion = round(proportion, 2) ) )
+
+(modfit06_stats <- glance(ssn_fit06))
+
+(fit06_esttab <- tidy(ssn_fit06))
+
+(loocv_fit06 <- loocv(ssn_fit06))
+
+plot(ssn_fit06, which = 1:4)
+
+summary(ssn_fit06)
+```
+
+
+## Save model fits to RData  
+
+```{r save ssnfits RData}
+# save.image(file = "../RData_images/ssnfits.RData")
+```
+
+
+```{r load SSNfits Rdata}
+# load(file = "../RData_images/ssnfits.RData")
+```
+
+
+# SSN model comparisons  
+
+
+```{r fit comparison}
+fit_compare <- 
+  glances(ssn_fit00, 
+          # ssn_fit01, ssn_fit02, ssn_fit03, ssn_fit04, 
+          # ssn_fit05, 
+          ssn_fit06)
+```
+
+
+```{r}
+# mean(fit_compare$RMSPE)
+# sd(fit_compare$RMSPE)
+# deparse( terms( formula(ssn_fit00$args$formula) ) )
+# 
+# terms(ssn_fit00$args$formula), attr("factors")
+# 
+# attr(ssn_fit00, "factors")
+```
+
+
+
+```{r}
+# sapply(get.models(fit_ls, TRUE), function(mo) deparse(terms(formula(mo), simplify = TRUE)[[3]], width.cutoff = 500))
+```
+
+
+
+# Predictions  
+
+##
+```{r predictions}
+preds_start <- Sys.time()
+ssn_preds_base <- predict(ssn_fit06, newdata = "preds10288") # ~3min
+(preds_elapsed <- (preds_end <- Sys.time()) - preds_start)
+```
+
+
+Extract the prediction data and save them for use in other applications.  
+
+
+```{r}
+ssn_predictions_df <-
+   ssn_get_data(ssn_preds_base,"preds10288")[,c("ssnid","avg_mean_W",
+                                          "avg_mean_W.predSE")] %>%
+  rename(ssnid = "ssnid", predtemp = "avg_mean_W", 
+         predtempSE = "avg_mean_W.predSE")
+
+
+pander(head(ssn_predictions_df),
+       caption = "First rows of the predicted temperatures and standard errors 
+       for the SSN model prediction sites in the Upper Rogue Basin.")
+
+
+
+
+# get residuals LOOCV data frame
+residuals_df <- getSSNdata.frame(resid_fit06)
+
+# Predicted and observed at fitting sites
+predobs <- data.frame(ssnid = residuals_df$ssnid,
+                      predicted = residuals_df[,"_CrossValPred_"],
+                      observed = residuals_df$obsval,
+                      fitted = residuals_df[,"_fit_"],
+                      residuals = residuals_df[,"_resid_"],
+                      residuals_stand = residuals_df[,"_resid.stand_"],
+                      leverage = residuals_df[,"_leverage_"],
+                      cooksdist = residuals_df[,"_CooksD_"])
+
+(obspred_plot <- 
+    ggplot(data = predobs,
+           aes(x = observed, y = predicted)) +
+    geom_point(shape = 20) +
+    geom_abline(slope = 1, color = "red", linetype = 2) +
+    theme_bw() +
+    labs(title = "Observed temperatures versus SSN predictions",
+         x = "Observed temperature (°C)",
+         y = "Predicted temperature (°C)")
+)  
+
+(fittedresidual_plot <- 
+    ggplot(data = predobs,
+           aes(x = fitted, y = residuals)) +
+    geom_point(shape = 20) +
+    geom_hline(yintercept = 0, color = "red", linetype = 2) +
+    theme_bw() +
+    labs(title = "Fitted temperatures versus SSN prediction residuals",
+         x = "Fitted temperature (°C)",
+         y = "Predicted temperature residuals")
+)
+
+# interpretation link: https://www.statology.org/residuals-vs-leverage-plot/#:~:text=leverage%20plot%20is%20a%20type,single%20point%20within%20the%20plot.
+(leveragestandresidual_plot <- 
+    ggplot(data = predobs,
+           aes(x = leverage, 
+               color = cooksdist, 
+               size = cooksdist,
+               y = residuals_stand)) +
+    geom_point(shape = 20) +
+    geom_text(data = filter(predobs, cooksdist >= 0.5), 
+              aes(label = ssnid,
+                  x = leverage, y = residuals_stand),
+              size = 3, hjust = "right", nudge_x = -0.5,
+              color = "black") +
+    
+    theme_bw() +
+    scale_size(name = "Cooks\nDistance",
+               range = c(2,6),
+               breaks = c(0,0.25,0.5,0.75,1), 
+               labels = c("0","0.25","0.5","0.75","1"),
+               guide = "legend") +
+    scale_color_gradientn(colors = c("black","black","red","red"),
+                          # mid = "red", midpoint = 0.5,
+                          values = c(0,0.5,0.55,1)) +
+    geom_hline(yintercept = 0, color = "red", linetype = 2) +
+    labs(title = "Point leverage versus SSN prediction standardized residuals",
+         x = "Point leverage",
+         color = "Cooks\nDistance",
+         size = "Cooks\nDistance",
+         y = "Prediction standardized residuals")
+)
+
+summary(ssn_obs_df01_stdzd)
+filter(ssn_obs_df01_stdzd, ssnid %in% c(11156, 11099))
+
+# save files for predictions
+ggsave(plot = obspred_plot, 
+       width = 6.5, height = 4.5, units = "in", dpi = 300,
+       filename = "../figures/observesversuspredicted_plot.png")
+ggsave(plot = fittedresidual_plot, 
+       width = 6.5, height = 4.5, units = "in", dpi = 300,
+       filename = "../figures/fittedversusresiduals_plot.png")
+ggsave(plot = leveragestandresidual_plot, 
+       width = 6.5, height = 4.5, units = "in", dpi = 300,
+       filename = "../figures/leverageversusresiduals_plot.png")
+write.csv(ssn_predictions_df,"../tables/predictions_ssn.csv",row.names = F)
+write.dbf(ssn_predictions_df,"../tables/predictions_ssn.dbf")
+saveRDS(ssn_predictions_df,"../tables/predictions_ssn.RDS")
+write.csv(predobs,"../tables/predobs_ssn.csv", row.names = F)
+
+pander(head(predobs),
+       caption = "First rows of the predicted temperatures for the observation 
+       sites.")
+```
+
+
+
+
+```{r prediction plots, fig.height=4.5, fig.width=6.5, fig.cap="MA mean July temperature predictions using XGBoost data."}
+pred_edges <- sf::st_read(dsn = "../ssnobj/lsn_july.ssn/edges.shp") %>%
+  left_join(x=.,y=select(ssn_preds_df01, COMID, ssnid), by = "COMID") %>%
+  left_join(x.,y=ssn_predictions_df, by = "ssnid") 
+
+# set jenks natural breaks for scaled color gradient
+jenksbrks <-
+   BAMMtools::getJenksBreaks(pred_edges$predtemp, 20, subset = NULL) %>%
+   scales::rescale(to = 0:1)
+
+(mean_july_map <-
+    ggplot(pred_edges) +
+    geom_sf(aes(color = predtemp)) +
+    
+    theme(legend.title.align = 0.5,
+          legend.direction = "vertical",
+          legend.box.just = "center") +
+    scale_color_viridis_c(option = "B",
+                          values = jenksbrks,
+                          guide = guide_colorbar(title.position = "top")) +
+    labs(color = "Temp.\n(°C)",
+         # subtitle = "NorWeST SSN historical average (1993-2011)",
+         title = "MA mean July temperature (°C)") +
+    theme_bw()
+)
+ggsave(plot = mean_july_map, width = 6.5, height = 4.5, units = "in", dpi = 300,
+       filename = "../figures/mean_july_ssn_prediction_map.png")
+```
+
+
+
+
+```{r}
+# read in the XGBoost MA temp predictions
+xgboost_preds_df <- 
+  read_csv(file = "../data/mastath-flowlines.csv") %>%
+  select(-BASIN_ID, -BASIN, -HUC8, 
+         # -starts_with("TOT_"), 
+         -starts_with("TAIR_"),
+         starts_with("TEMP_"))
+
+
+pred_comparison_sf <- 
+  left_join(pred_edges,xgboost_preds_df, by = "COMID") %>%
+  mutate(Tdiff_July = predtemp - TEMP_JUL_BASE) %>%
+  filter(!is.na(Tdiff_July)) %>%
+  filter(TOT_BFI > 0)
+
+summary(pred_comparison_sf$Tdiff_July)
+```
+
+
+
+
+```{r temp difference map for ssn vs xgboost, fig.width=6.5, fig.height=4.5}
+(temp_diff_map <- 
+   ggplot(data = pred_comparison_sf) +
+   geom_sf(aes(color = Tdiff_July)) +
+   
+   theme_bw() +
+   theme(legend.title.align = 0.5,
+         legend.position = c(0.2,0.9),
+         legend.direction = "horizontal",
+         legend.background = element_blank(),
+         legend.box.just = "center") +
+   scale_color_gradient2(low = "blue", mid = "white", high = "red", 
+                         na.value = "grey50") +
+   labs(color = "Temp.\n(°C)",
+        subtitle = "(Difference = SSN temperature - XGboost temperature)",
+        caption = "Negative values indicate warmer XGboost predictions",
+        title = "Massachusetts mean July temperature differences") 
+ 
+)
+ggsave(plot = temp_diff_map,
+       filename = "../figures/SSNXGBoostTempDiffMap.png")
+```
+
+
+
+```{r covariates by temperature difference panel, fig.width=6.5, fig.height=7.5}
+Tdiff_cov_ls <- 
+  c("TotAreaKm2","TOT_BFI","TOT_CNPY11_BUFF100","TOT_NLCD11_WATER",
+    # "TOT_NDAMS2013",
+    "TOT_NID_STORAGE2013",
+    # "TOT_NORM_STORAGE2013",
+    # "TOT_MAJOR2013",
+    "TOT_BASIN_SLOPE", 
+    # "TOT_STREAM_SLOPE",
+    "TOT_ELEV_MEAN",
+    "TOT_STREAM_LENGTH",
+    "TOT_TAV7100_JUL")
+
+preds_cov_df <- select(pred_comparison_sf, 
+                       predtemp, TEMP_JUL_BASE, Tdiff_July,
+                       -TOT_STREAM_SLOPE,
+                       all_of(Tdiff_cov_ls) ) 
+
+Tdiff_july_longer <- preds_cov_df %>%
+  # mutate(DAcolor = scales::rescale(TotAreaKm2, to = 0:1)) %>%
+  mutate(DAcolor = TotAreaKm2) %>%
+  pivot_longer(data = ., 
+               cols = all_of(Tdiff_cov_ls), 
+               names_to = "cov_name", 
+               values_to = "cov_value" ) %>%
+  mutate(cov_name = factor(cov_name,
+                           levels = c("TotAreaKm2", 
+                                      "TOT_STREAM_LENGTH",
+                                      "TOT_ELEV_MEAN", 
+                                      "TOT_TAV7100_JUL", "TOT_BFI", 
+                                      "TOT_CNPY11_BUFF100", 
+                                      # "TOT_STREAM_SLOPE",
+                                      "TOT_BASIN_SLOPE",
+                                      # "TOT_NDAMS2013",
+                                      # "TOT_NORM_STORAGE2013",
+                                      # "TOT_MAJOR2013",
+                                      "TOT_NID_STORAGE2013", 
+                                      "TOT_NLCD11_WATER")))
+
+(cov_by_Tdiff_ggplot <-
+    ggplot(data = Tdiff_july_longer,
+           aes(x = cov_value, y = Tdiff_July, color = DAcolor) ) + 
+    geom_point(shape = 20, alpha = 0.1) + 
+    geom_hline(yintercept = 0, color = "red") +
+    
+    theme_bw() +
+    scale_color_continuous(type = "viridis") +
+    # theme(legend.position = c(0.85,0.15)) +  # 8-PANEL PLOT PUTS IN 9TH SQUARE
+    theme(legend.position = "bottom") +  # 9-PANEL PLOT PUTS AT BOTTOM
+    labs(x = "Covariate values", y = "Temperature difference (°C)",
+         subtitle = "(Difference = SSN temperature - XGboost temperature)",
+         caption = "Negative values indicate warmer XGboost predictions",
+         color = "Basin Area\n(km²)",
+         title = "SSN and XGBoost model prediction temperature differences by covariate") +
+    facet_wrap(~ cov_name, scales = "free", ncol = 3)
+)
+
+ggsave(plot = cov_by_Tdiff_ggplot,
+       filename = "../figures/SSNModelPredictionDiffFromXGBoost.png")
+```
+
+
+```{r}
+plot.influenceSSN(resid_fit06)
+```
+
+
+```{r}
+plot.glmssn.predict(ssn_preds_base)
+```
+
+

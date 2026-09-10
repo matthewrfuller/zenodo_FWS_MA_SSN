@@ -1,0 +1,2 @@
+"0","detach(""package:micromap"", unload = TRUE, character.only = TRUE)"
+"0","library(micromap)"

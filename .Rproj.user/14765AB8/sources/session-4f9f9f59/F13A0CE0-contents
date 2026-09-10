@@ -1,0 +1,110 @@
+# Initial testing of the "SSNbler" R package for SSN object development
+# 
+library(tidyverse)
+library(sf)
+library(leaflet)
+# remotes::install_github("pet221/SSNbler", ref = "main")
+library(SSN2)
+library(SSNbler)
+
+
+# tutorial/vignette for SSNbler:
+# https://pet221.github.io/SSNbler/articles/introduction.html
+
+# vignette(package = "SSNbler")
+
+# Read in the edges, obs, and preds data
+MA_streams <- st_read("./data/MA_SSN/edges.shp") |>
+  select(COMID, LENGTHKM, TotDASqKM, rcaAreaKm2, TotAreaKm2)
+MA_obs <- st_read("./data/MA_SSN/sites.shp") |>
+  select(-starts_with("NEAR_"),-rid, -ratio, -upDist, -afvArea, -locID, - netID, -pid)
+MA_preds <- st_read("./data/MA_SSN/preds10288.shp") |>
+  select(-starts_with("NEAR_"),-rid, -ratio, -upDist, -afvArea, -locID, - netID, -pid)
+
+# view the data
+ggplot() +
+  geom_sf(data = MA_streams) +
+  geom_sf(data = MA_preds, color = "red", size = 1) +
+  geom_sf(data = MA_obs, color = "green", size = 2) 
+
+# create LSN (1 min for MA SSN with 16k reaches)
+edges <- lines_to_lsn(streams = MA_streams,
+                      lsn_path = "./MA_SSN_LAN",
+                      check_topology = TRUE,
+                      snap_tolerance = 1,
+                      topo_tolerance = 10,
+                      overwrite = TRUE )
+
+# GL04 NSI edges
+gl04_streams <- st_read("./data/GL04/flowline_GL04_NSI_01topology_fix.shp")
+
+ggplot() + geom_sf(data = gl04_streams)
+
+# create LSN (1 min for MA SSN with 16k reaches)
+edges <- lines_to_lsn(streams = gl04_streams,
+                      lsn_path = "./GL04_LSN",
+                      check_topology = FALSE,
+                      snap_tolerance = 1,
+                      # topo_tolerance = 10,
+                      overwrite = TRUE )
+
+# MA02 NSI edges
+ma02_streams <- st_read("./data/MA02/Flowline_MA02_NSI.shp")
+
+ggplot() + geom_sf(data = ma02_streams)
+
+# create LSN (1 min for MA SSN with 16k reaches)
+edges <- lines_to_lsn(streams = ma02_streams,
+                      lsn_path = "./MA02_LSN",
+                      check_topology = FALSE,
+                      snap_tolerance = 1,
+                      # topo_tolerance = 10,
+                      overwrite = TRUE )
+
+# MA02 NSI edges
+ne01_streams <- st_read("./data/NE01/Flowline_NE01_NSI.shp")
+
+ggplot() + geom_sf(data = ne01_streams)
+
+# create LSN (1 min for MA SSN with 16k reaches)
+edges <- lines_to_lsn(streams = ne01_streams,
+                      lsn_path = "./NE01_LSN",
+                      check_topology = FALSE,
+                      snap_tolerance = 1,
+                      # topo_tolerance = 10,
+                      overwrite = TRUE )
+
+
+nodes <- st_read("./MA_SSN_LAN/nodes.gpkg")
+
+node_errors <- st_read("./MA_SSN_LAN/node_errors.gpkg") |> st_transform(4326) |>
+  modify_if(is.character, as.factor)
+summary(node_errors)
+
+ggplot() + 
+  geom_sf(data = edges) +
+  geom_sf(data = filter(nodes, nodecat == "Outlet"))
+
+# Set up basemap tiles for various background maps
+basemap <- leaflet() |>
+  # add background maps
+  addProviderTiles("Esri.WorldTopoMap", group = "Esri.WorldTopoMap") |>
+  addProviderTiles("Esri.WorldImagery", group = "Esri.WorldImagery") |>  
+  # add a layers control
+  addLayersControl(baseGroups = c("Esri.WorldTopoMap",
+                                  "Esri.WorldImagery"),
+                   # position background map selection icon in the top-left part of map
+                   position = "topleft")
+
+
+# Map the plots for each sector.  
+(node_check_leaflet <- basemap |>
+    addPolylines(data = st_transform(edges, 4326), color = "blue", weight = 1) |>
+    # addCircleMarkers(data = filter(st_transform(nodes, 4326), nodecat == "Outlet"),
+    #                  radius = 4, opacity = 1, color = "green" ) |>
+    addCircleMarkers(data = filter(node_errors, error == "Downstream Divergence"),
+                     popup = ~paste0("PointID: ", pointid, "<br>","error: ", error),
+                     radius = 1, opacity = 1, color = "red" ) 
+)
+
+

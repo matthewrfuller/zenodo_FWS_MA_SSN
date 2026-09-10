@@ -1,0 +1,5 @@
+"0","# Read in the SSN object and prediction sites contained in the ""preds10288"" "
+"0","# predictions slot of the SSN object. (< 1 min to load)"
+"0","ssn_obj <- ssn_import(path = ""../ssnobj/MASSN_july_standardized.ssn/"", "
+"0","                      overwrite = TRUE, "
+"0","                      predpts = ""preds10288.shp"")"

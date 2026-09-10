@@ -1,0 +1,3550 @@
+---
+title: "MA SSN manuscript figures"
+author: "Matt Fuller"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    number_sections: true
+    toc_float: true
+    toc_depth: 3
+    code_folding: hide
+  pdf_document:
+    toc: true
+    toc_depth: '3'
+---
+
+
+```{r setup, include=TRUE, warning=FALSE, message=FALSE}
+library(elevatr)
+library(terra)
+library(sf)
+library(spData)  # for US states polygons data(us_states, package = "spData")
+library(mapdata)
+library(usmap)
+library(basemaps)
+library(ggspatial)
+library(ggtext)
+library(ggridges)
+library(GGally)
+library(cowplot) 
+library(viridisLite)
+
+# Linked micromaps dependencies
+library(micromap)
+library(RColorBrewer)
+library(rmapshaper)
+library(grid)
+library(gridExtra)
+library(gridGraphics)
+library(ggplotify)
+library(grDevices)
+
+# last to supersede any other data wrangling fnxs in previously loaded packages
+library(tidyverse)
+
+threshold_temp_max <- 30
+```
+
+# Read in data  
+
+```{r}
+# read in prediction data
+# Recent Climate scenarios
+augm_rcnt <-          readRDS("../predictions/augm_rcnt.RDS")
+augm_rcntdam <-       readRDS("../predictions/augm_rcntdam.RDS")
+augm_rcntshade <-     readRDS("../predictions/augm_rcntshade.RDS")
+augm_rcntdamshade <-  readRDS("../predictions/augm_rcntdamshade.RDS")
+
+# Future Climate scenarios
+augm_futr <-          readRDS("../predictions/augm_futr.RDS")
+augm_futrdam <-      readRDS("../predictions/augm_futrdam.RDS")
+augm_futrshade <-     readRDS("../predictions/augm_futrshade.RDS")
+augm_futrdamshade <-  readRDS("../predictions/augm_futrdamshade.RDS")
+```
+
+
+```{r}
+# observation and prediction site geospatial data 
+obs_df <- readRDS("../data/obs_df_MA_SSN.RDS")
+preds_df <- readRDS("../data/preds_df_MA_SSN.RDS")
+
+# geospatial river network lines
+ma_edges<- readRDS(file = "../data/ssnobj_edges.RDS")
+```
+
+
+
+```{r}
+# Elevation threshold data frame to join to predictions for elevation banding
+elev_band_width_m <- 10
+elev_threshold_df <- 
+  data.frame(elev_band_min = seq(0,750,elev_band_width_m)) |>
+  mutate(elev_band_mid = elev_band_min + (elev_band_width_m/2),
+         elev_band_max = elev_band_min + elev_band_width_m) |>
+  group_by(elev_band = cut(elev_band_mid+1, 
+                           breaks= seq(0, 750, elev_band_width_m)) ) |>ungroup()
+
+# Function to calculated proportion of sites/reach length for a scenario that 
+# is gained or lost when compared to the recent climate baseline. Dependent on 
+# two inputs: scenario predictions from augment() scenario character string name
+# There are other required background inputs that are not changed that include:
+# the elevation band df for the recent climate scenario as a baseline 
+# (elev_band_00rcnt) and the "elev_threshold_df" R df that holds the elevation
+# band min/mid/max values and the factored bands column.
+elev_band_proportion_fnx <- function(augment_df, scenario_name) {
+  elev_band_df <- augment_df |> 
+    # remove sf geometry 
+    st_drop_geometry() |>  
+    # grab the total reach length and number of reaches for each elevation band
+    # filter to cold reaches
+    filter(.fitted <= 20) |>
+    # count reaches and sum up the length of stream within each elevation band
+    group_by(elev_band = cut(v2elevm, breaks= seq(0, 750, elev_band_width_m)) ) |> 
+    reframe(clim_cond = scenario_name,  
+            n_sites = n(),
+            reach_km = sum(Shape_Leng)/1000) |>
+    # join the elevation band threshold df to this summary
+    right_join(elev_threshold_df, by = c("elev_band") ) |>
+    # add the baseline prediction data to this scenario's summary data
+    left_join(select(elev_band_00rcnt, elev_band_mid,
+                     n_sites_rcnt = n_sites, reach_km_rcnt = reach_km,
+                     n_sites_tot, reach_km_tot),
+              by = c("elev_band_mid")) |>
+    # calculate the relative stats based on the baseline scenario data
+    mutate(siteprop_n = (n_sites/n_sites_rcnt)-1,
+           siteprop_km = (reach_km/reach_km_rcnt)-1,
+           siteprop_n_tot = (n_sites/n_sites_tot),
+           siteprop_km_tot = (reach_km/reach_km_tot)) 
+  return(elev_band_df)
+}
+```
+
+
+# Figure 1: Study system map  
+
+## Map data preparation  
+
+```{r fig.width=6.5, fig.height=4.5, message=FALSE, warning=FALSE}
+# Grab edges and join to temperature predictions from recent climate scenario
+ma_streams_sf <- 
+  st_transform(left_join(x = ma_edges, 
+                         y = select(st_drop_geometry(augm_rcnt), 
+                                    rid, Tw_rcnt = .fitted,
+                                    ssnid, AreaKm2, v2elevm, BFIc), 
+                         by = c("rid")) |>
+                 left_join(y = select(st_drop_geometry(augm_rcntdam), 
+                                      rid, Tw_rcntdam = .fitted), 
+                           by = c("rid")) |>
+                 left_join(y = select(st_drop_geometry(augm_rcntshade), 
+                                      rid, Tw_rcntshade = .fitted), 
+                           by = c("rid")) |>
+                 left_join(y = select(st_drop_geometry(augm_rcntdamshade), 
+                                      rid, Tw_rcntdamshade = .fitted), 
+                           by = c("rid")) |>
+                 left_join(y = select(st_drop_geometry(augm_futr), 
+                                      rid, Tw_futr = .fitted), 
+                           by = c("rid")) |>
+                 left_join(y = select(st_drop_geometry(augm_futrdam), 
+                                      rid, Tw_futrdam = .fitted), 
+                           by = c("rid")) |>
+                 left_join(y = select(st_drop_geometry(augm_futrshade), 
+                                      rid, Tw_futrshade = .fitted), 
+                           by = c("rid")) |>
+                 left_join(y = select(st_drop_geometry(augm_futrdamshade), 
+                                      rid, Tw_futrdamshade = .fitted), 
+                           by = c("rid")),
+               crs = 3857)
+
+# create map extents using 7.5km buffer around streams of MA
+map_bbox_buffer <- 7500
+map_extent <- 
+  st_bbox(st_buffer(filter(ma_streams_sf, !is.na(Tw_rcnt) | TotDASqKM > 5000), 
+                    dist = map_bbox_buffer), 
+          crs = 3857)
+
+
+# North America inset/secondary plot for reference of CONUS
+usa <- map_data("usa") 
+us_states <- map_data("state") 
+ne_states <- us_states |>
+  filter(region %in% c("connecticut", "maine", "massachusetts", "new hampshire", 
+                       "rhode island", "vermont"))
+# This scale provides better MA state boundary resolution
+ma_state_boundary <- 
+  rnaturalearth::ne_states(country = c("United States of America"), 
+                           returnclass = "sf") |>
+  filter(name == "Massachusetts")
+
+canada <- map_data("worldHires", "Canada")
+mexico <- map_data("worldHires", "Mexico")
+NA_map_ggplot <- ggplot() +
+  geom_polygon(data = canada, aes(x = long, y = lat, group = group), 
+               fill = "white", color = "grey20", linewidth = 0.1) +
+  geom_polygon(data = mexico, aes(x = long, y = lat, group = group), 
+               fill = "white", color = "grey20", linewidth = 0.1) +
+  geom_polygon(data = us_states, aes(x = long, y = lat, group = group), 
+               fill = "grey70", color = "grey20", linewidth = 0.1) +
+  geom_polygon(data = ne_states, aes(x = long, y = lat, group = group), 
+               fill = "red", color = "red", linewidth = 0.1) +
+  geom_polygon(data = usa, aes(x = long, y = lat, group = group), 
+               fill = NA, color = "grey20", linewidth = 0.25) +
+  # annotation_scale(location = "tl", style = "ticks", text_family = "sans")  +
+  coord_sf(crs = 3857) +
+  theme_void()
+# NA_map_ggplot
+```
+
+
+```{r message=FALSE, warning=FALSE}
+# Get the boundary for Massachusetts
+ma_boundary <- st_as_sf(maps::map("state", "massachusetts", plot = FALSE, fill = TRUE))
+
+# Download the DEM for Massachusetts (using a zoom level for ~30m resolution)
+# For a higher resolution closer to 10m, increase the zoom level (e.g., z = 14)
+# Note: Higher zoom levels will significantly increase download and processing time.
+ma_dem <- get_elev_raster(locations = ma_boundary, z = 9, clip = "locations")
+
+
+# Define the breaks for the elevation bands
+elevation_breaks <- c(0, 100, 200, 300, 400, 500, 600, Inf)
+# Define corresponding labels for the bands
+elevation_labels <- 
+  c("0-100", "100-200", "200-300", "300-400", "400-500", "500-600", ">600")
+# One color per band using Cividis (option "C")
+n_bands   <- length(elevation_labels)
+band_cols <- viridisLite::viridis(n_bands, option = "C")  # or viridis::viridis
+
+
+# Convert the DEM to a data frame for ggplot
+ma_dem_df <- as.data.frame(ma_dem, xy = TRUE)
+colnames(ma_dem_df) <- c("x", "y", "elevation")
+ma_dem_df <- na.omit(ma_dem_df)
+
+
+# Create a new column in the dataframe with the binned data
+ma_dem_df$elevation_band <- cut(ma_dem_df$elevation,
+                                breaks = elevation_breaks,
+                                labels = elevation_labels,
+                                right = FALSE, # Use [0, 100) intervals
+                                include.lowest = TRUE)
+
+# Factor for elevation bands
+ma_dem_df$elev_band <- factor(ma_dem_df$elevation_band, levels = elevation_labels)
+# Ordered, numeric index for elevation bands for plotting DEM raster by band
+ma_dem_df$band_index = as.integer(ma_dem_df$elev_band)
+
+
+# Generate major contour lines (100m intervals)
+major_breaks <- seq(0, 800, 100)
+major_contours <- raster::rasterToContour(ma_dem, levels = major_breaks)
+major_contours_sf <- st_as_sf(major_contours)
+
+# Generate minor contour lines (50m intervals)
+minor_breaks <- seq(50, 750, 100)
+minor_contours <- raster::rasterToContour(ma_dem, levels = minor_breaks)
+minor_contours_sf <- st_as_sf(minor_contours)
+
+# --- Create USA Inset Map ---
+# Get USA map data
+usa_map <- st_as_sf(maps::map("state", plot = FALSE, fill = TRUE))
+
+# Define the Northeast region
+ne_states <- 
+  c("massachusetts", "connecticut", "rhode island", "vermont", "new hampshire", "maine")
+ne_map <- subset(usa_map, ID %in% ne_states)
+
+# --- Create Northeast Inset Map ---
+ne_inset <- ggplot() +
+  geom_sf(data = ne_map, fill = "white", color = "black", linewidth = 0.1) +
+  geom_sf(data = ma_boundary, fill = "red") +
+  theme_void() +
+  # theme(panel.border = element_rect(color = "black", fill = NA, linewidth = 1))
+  theme(panel.border = element_blank())
+```
+
+
+## Fig 1A. Stream network map  
+
+```{r fig.height=4.5, fig.width=6.5, warning = FALSE}
+# Create the main map of Massachusetts with a Cividis discrete color palette
+main_map_network <- ggplot() +
+  # Add the state boundary
+  geom_sf(data = ma_state_boundary, fill = NA, color = "grey20", linewidth = 0.5) +
+  # add stream network with drainage area weighted linewidth 
+  geom_sf(data = filter(ma_streams_sf, TotDASqKM < 2550 & Tw_rcnt < 34),
+          aes(linewidth = TotDASqKM) , color = "#A6CEE3", lineend = "round") + 
+  scale_linewidth(range = c(0.1, 1.25)) +
+  
+  # add Connecticut and Merrimack Rivers
+  geom_sf(data = filter(ma_streams_sf, TotDASqKM > 5000), 
+          color = "#1F78B4", linewidth = 0.8, lineend = "round") +
+  geom_text(aes(x = -72.6, y = 42.94, hjust = 1),
+            label  = "Connecticut River", size = 3) +
+  geom_text(aes(x = -71.4, y = 42.94, hjust = 0),
+            label  = "Merrimack River", size = 3) +
+  
+  # add the observation sites
+  geom_sf(data = obs_df, fill = "#FF7F00", shape = 21,
+          color = "#B34700",
+          stroke = 0.2, size = 2) +
+  
+  # Add North Arrow
+  annotation_north_arrow(
+    location = "tr",       # Top right location
+    which_north = "true",
+    pad_x = unit(0.2, "in"), # Padding from the edge
+    pad_y = unit(0.2, "in"),
+    style = north_arrow_fancy_orienteering # A decorative style
+  ) +
+  
+  # Add Scale Bar
+  annotation_scale(
+    location = "tr",       # Bottom left location
+    bar_cols = c("black", "white"),
+    # text_family = "Arial",
+    width_hint = 0.18,      # Relative width of the scale bar (30% of map width)
+    pad_y = unit(3, "cm")
+  ) +
+  
+  # Set map coordinates
+  coord_sf(crs = st_crs(ma_boundary)) +
+  
+  theme_void() +
+  theme(axis.title = element_blank(), 
+        plot.background = element_rect(fill = "white"),
+        legend.position = "none") 
+
+# Final map with insets
+(network_map <- ggdraw(main_map_network) +
+    draw_plot(NA_map_ggplot, x = 0.02, y = 0.02, width = 0.3, height = 0.4) +
+    draw_plot(ne_inset, x = 0.25, y = 0.05, width = 0.35, height = 0.4)  )
+```
+
+```{r}
+# ggsave(plot = network_map, width = 6.5, height = 4.5, units = "in",
+#        dpi = 600, filename = "../figures/fig1_optionB_studymap.png")
+# 
+# ggsave(plot = network_map, width = 6.5, height = 4.5, units = "in",
+#        device = cairo_ps,
+#        dpi = 600, filename = "../figures/fig1_studymap.eps")
+```
+
+
+
+## Fig 1B. Topographic DEM Map  
+
+
+```{r fig.height=4.5, fig.width=6.5, warning = FALSE}
+# Create the main map of Massachusetts with a Cividis discrete color palette
+main_map_cividis <- ggplot() +
+  # Add the DEM raster layer using the discrete 'elevation_band'
+  geom_raster(data = ma_dem_df, 
+              aes(x = x, y = y, fill = band_index)) +
+  
+  # add Connecticut and Merrimack Rivers
+  geom_sf(data = filter(ma_streams_sf, TotDASqKM > 5000), 
+          color = "black", linewidth = 0.8, lineend = "round") +
+  geom_text(aes(x = -72.6, y = 42.94, hjust = 1),
+            label  = "Connecticut River", size = 3) +
+  geom_text(aes(x = -71.4, y = 42.94, hjust = 0),
+            label  = "Merrimack River", size = 3) +
+  
+  # Stepped colour bar guide: looks like a horizontal gradient strip
+  scale_fill_stepsn(
+    colors = band_cols,
+    breaks  = seq_len(n_bands),
+    labels  = gsub("-", "\u2013", elevation_labels),  # add en dash to bands
+    limits = c(1,8.5),
+    na.value = "transparent",  # "transparent" to avoid showing NA pixels
+    guide = guide_colorsteps(
+      direction = "horizontal",
+      title.position = "top",
+      label.position = "bottom",
+      ticks = TRUE,
+      even.steps = TRUE,
+      barwidth  = unit(6, "cm"),
+      barheight = unit(4, "mm")
+    )
+  ) +
+  
+  
+  # Add major contour lines
+  # geom_sf(data = major_contours_sf, color = "black", linewidth = 0.5) +
+  
+  # Add minor contour lines
+  # geom_sf(data = minor_contours_sf, color = "black", linetype = "dashed", linewidth = 0.25) +
+  
+  # Add the state boundary
+  # geom_sf(data = ma_boundary, fill = NA, color = "black", linewidth = 1) +
+  
+  # Add North Arrow
+  annotation_north_arrow(
+    location = "tr",       # Top right location
+    which_north = "true",
+    pad_x = unit(0.2, "in"), # Padding from the edge
+    pad_y = unit(0.2, "in"),
+    style = north_arrow_fancy_orienteering # A decorative style
+  ) +
+  
+  # Add Scale Bar
+  annotation_scale(
+    location = "tr",       # Bottom left location
+    bar_cols = c("black", "white"),
+    # text_family = "Arial",
+    width_hint = 0.18,      # Relative width of the scale bar (30% of map width)
+    pad_y = unit(2.4, "cm")
+  ) +
+  
+  # Set map coordinates
+  coord_sf(crs = st_crs(ma_boundary)) +
+  
+  # Add titles and labels
+  labs(
+    # title = "Topographic Map of Massachusetts (Cividis Palette)",
+    # subtitle = "Contour lines at 100m intervals (solid) and 50m intervals (dashed)",
+    fill = "Elevation Band (m)" # Update the legend title
+  ) +
+  theme_void() +
+  theme(plot.background = element_rect(fill = "white"),
+        legend.position = "inside",
+        legend.position.inside = c(0.3, 0.25),
+        legend.direction = "horizontal",
+        legend.title = element_text(margin = margin(b = 4)),
+        legend.text  = element_text(size = 8, angle = 45, hjust = 0.75)
+  )
+
+(elevation_map <-main_map_cividis)
+
+# Final map with insets
+# (elevation_map <- ggdraw(main_map_cividis) )+
+#   draw_plot(NA_map_ggplot, x = 0.02, y = 0.02, width = 0.3, height = 0.4) +
+#   draw_plot(ne_inset, x = 0.25, y = 0.05, width = 0.35, height = 0.4)  )
+```
+
+## Fig 1 Panel  
+
+```{r fig.height=9, fig.width=6.5, warning = FALSE}
+(fig1_panel <- 
+  cowplot::plot_grid(network_map,elevation_map,
+                     labels = c("A ","B "),
+                     nrow = 2) + 
+  theme(plot.background = element_rect(fill = "white",color = NA))
+ )
+```
+
+
+```{r}
+ggsave(plot = fig1_panel, width = 6.5, height = 9, units = "in",
+       dpi = 600, filename = "../figures/Figure1_studyarea_and_dem.png")
+
+ggsave(plot = fig1_panel, width = 6.5, height = 9, units = "in",
+       device = cairo_ps,
+       dpi = 600, filename = "../figures/Figure1_studyarea_and_dem.eps")
+```
+
+
+
+<br>  
+
+# Linked Micromaps  
+
+## Micromap function modifications for FWS style formatting  
+
+###  Reset micromap functions as necessary  
+
+Use to revert to the original micromap function code as necessary.  
+
+```{r}
+detach("package:micromap", unload = TRUE, character.only = TRUE)
+library(micromap)
+```
+
+
+### `axis_opts()` update   
+
+We need to modify the axis options function to get only x and y axes (no plot border) and provide x-axis tick marks with no x-axis labels. We modify the `axis_opt()` function in micromap to do this.  
+
+```{r}
+axis_opts <- function(i, pl, a, limsx=NA, limsy=NA, border=TRUE, expx=FALSE){
+  # i=p; a=att; limsx=tmp.limsx; limsy=c(tmp.limsy,tmp.median.limsy); border=FALSE; expx=FALSE
+  
+  # many features are "hidden" by simply coloring the same color as the background so
+  #   if panel background is NA we assume "white" will effectively do the hiding
+  bgcolor <- ifelse(!is.na(a[[i]]$panel.bgcolor), a[[i]]$panel.bgcolor, 'white')
+  
+  # specify label size as maximum of all requested label sizes
+  label.size <- as.numeric(max(all_atts(a, 'xaxis.labels.size')))*10
+  
+  
+  # limsy will sometimes be in the form (c(lower bound, upper bound, lower bound for the median , upper bound for the median))
+  #   if thats the case, we split it into the two seperate limits here
+  median.limsy <- NULL
+  if(length(limsy)==4) {median.limsy <- limsy[3:4]; limsy <- limsy[1:2]}
+  
+  
+  ##############    
+  ### X axis ### 
+  ############## 
+  # with ggplot2, most axis specifications need to be made through the "scale_x_continuous()" function. there
+  #   are 5 arguements: title, breaks (tick locations), labels (tick labels), limits (data limits), and expand (the 
+  #   extent to which the axis is expanded beyond the limits of the data). these specifications must be made 
+  # 	all at once so we build this statement as a string and then execute it through an "eval" statement at the end
+  
+  # the following boolean variables state whether to include these specifications in the scale_x_continuous statement
+  # 	we start by assuming none except title will be needed 
+  x.breaks <- x.labels <- x.limits <- x.expand <- FALSE
+  
+  
+  ### axis title ###
+  xstr.title <- "''"
+  
+  # If all axis titles aren't NA then we must change the other titles to be blank in order to leave space
+  # 	for them at the bottom. If any title is multiple lines (ie contains '\n') then we must add in 
+  # 	the correct number of character returns to the other titles in order to make the plot uniform
+  if(!all(is.na(all_atts(a, 'xaxis.title')))){
+    tmp.size <- max(as.numeric(all_atts(a, 'xaxis.title.size')))*8		# All titles must be same size. Default size is 8
+    tmp.lineheight <- as.numeric(all_atts(a, 'xaxis.title.lineheight'))
+    tmp.lineheight <- tmp.lineheight[which.max(abs(tmp.lineheight-1))] 	# All line heights must be equal so we use the height 
+    # most drastically different from 1
+    
+    
+    tmp.titles <- lapply(all_atts(a, 'xaxis.title'), function(t) if(is.na(t)|t=='') t=' ' else t)
+    tmp.title <- tmp.titles[[i]]
+    ns <- max(unlist(lapply(tmp.titles, function(x) length(strsplit(x, '\n')[[1]])))) - length(strsplit(tmp.title,'\n')[[1]])  
+    if(ns>0) tmp.title <- paste(tmp.title, rep(' \n ',ns), sep='')
+    
+    xstr.title <- paste("'",tmp.title,"'",sep='')
+    pl <- pl + theme(axis.title.x = element_text(family=a[[i]]$xaxis.title.font, face=a[[i]]$xaxis.title.face, 
+                                                 colour=a[[i]]$xaxis.title.color, size=tmp.size, lineheight=tmp.lineheight))
+  } 
+  
+  
+  ### axis limits and expansion ###
+  if (!any(is.na(limsx))) x.limits <- TRUE
+  
+  # if there is a border to be added, we must manually deal with expansion
+  if(!expx){				
+    x.expand <- TRUE
+    xstr.expand <- as.character(", expand=c(0,0)")
+  }
+  
+  xstr.limits <- as.character(paste('c(',min(limsx), ',', max(limsx),')'))
+  xstr.limits <- paste(", limits=", xstr.limits)
+  
+  
+  
+  ### panel footers (not completed) ###
+  # "panel footers" are really just augmented x axis titles
+  # if all axis titles are blank then we hide axis titles on the whole plot	
+  if(all(is.na(all_atts(a, 'xaxis.title')))) pl <- pl + theme(axis.title.x = element_blank()) 	
+  
+  
+  ### axis lines ###
+  # note: axis lines are always there, if the user doesn't want to 
+  #       see them they are colored to match the background
+  if (!a[[i]]$xaxis.line.display & !a[[i]]$yaxis.line.display) {
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # MRF edit: bgcolor was swapped out for 'black' to make the axis lines visible in the legend
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    pl <- pl + theme(axis.line = element_line(colour='black'))                    
+    
+    # else lines will be plotted
+  } else {
+    pl <- pl + theme(axis.line = element_line(colour='black')) 
+  } 
+  
+  
+  ### axis ticks ###
+  # for now we assume ticks are never wanted as they make things pretty cluttered looking
+  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  #   COMMENTED THE AXIS TICK BLANK CODE OUT SO THEY APPEAR
+  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  # pl <- pl + theme(axis.ticks = element_blank())
+  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  
+  
+  ### axis text ###
+  # trys to hide axis text on the whole plot
+  if(!any(all_attsb(a, 'xaxis.text.display'))) {									
+    pl <- pl + theme(axis.text.x = element_blank())
+    
+    # otherwise trys to "hide" axis text on this panel
+  } else if (!a[[i]]$xaxis.text.display) {								
+    pl <- pl + theme(axis.text.x = element_text(colour=bgcolor, size=label.size))	
+    
+    # axis text will show and we'll add specific labels if requested
+  } else if (!is.na(unlist(a[[i]]$xaxis.labels)[1]) & 
+             !is.na(unlist(a[[i]]$xaxis.ticks)[1])) { 	
+    
+    tmpTheme <- "theme(axis.text.x = element_text(size=label.size"
+    if(!is.null(a[[i]]$xaxis.labels.angle)) tmpTheme <- paste(tmpTheme, ", angle = ", a[[i]]$xaxis.labels.angle)
+    if(!is.null(a[[i]]$xaxis.labels.hjust)) tmpTheme <- paste(tmpTheme, ", hjust =", a[[i]]$xaxis.labels.hjust)
+    if(!is.null(a[[i]]$xaxis.labels.vjust)) tmpTheme <- paste(tmpTheme, ", vjust =", a[[i]]$xaxis.labels.vjust)
+    tmpTheme <- paste(tmpTheme, "))")
+    
+    pl <- pl + eval(parse(text=tmpTheme	))
+    
+    x.breaks <- x.labels <- TRUE		
+    xstr.breaks <- paste(', breaks=c(', make.string(a[[i]]$xaxis.ticks),')',sep='')
+    xstr.labels <- paste(', labels=c(', make.string(a[[i]]$xaxis.labels),')',sep='')
+    
+    # warning if user only specified text but not location or vice versa
+  } else if (!is.na(unlist(a[[i]]$xaxis.labels)[1]) | 
+             !is.na(unlist(a[[i]]$xaxis.ticks)[1])) { 
+    print('Warning: both axis labels AND tick location must be specified')
+    
+    # otherwise text shows up as ggplot defaults
+  }
+  
+  # transformation string
+  xstr.trans <- paste0(', trans = ', a[[i]]$trans)
+  
+  xstr <- paste("scale_x_continuous(", xstr.title, xstr.trans)
+  if (x.expand) xstr <- paste(xstr, xstr.expand)
+  if (x.breaks) xstr <- paste(xstr, xstr.breaks)
+  if (x.labels) xstr <- paste(xstr, xstr.labels)
+  if (x.limits) xstr <- paste(xstr, xstr.limits)
+  xstr <- paste(xstr, ")")
+  
+  pl <- pl + eval(parse(text=xstr))
+  
+  
+  
+  ##############
+  ### Y axis ###   
+  ##############
+  # with ggplot2, most axis specifications need to be made through the "scale_y_continuous()" function. there
+  #   are 5 arguements: title, breaks (tick locations), labels (tick labels), limits (data limits), and expand (the 
+  #   extent to which the axis is expanded beyond the limits of the data). these specifications must be made 
+  #   all at once so we build this statement as a string and then execute it through an "eval" statement at the end
+  
+  ### axis title ###
+  ystr.title  <- ifelse(!is.na(a[[i]]$yaxis.title), a[[i]]$yaxis.title, "''")
+  
+  
+  ### axis text ###
+  if(a[[i]]$yaxis.ticks.display | a[[i]]$yaxis.text.display) ystr.breaks <- "" else ystr.breaks <- ", breaks=NULL" 
+  
+  
+  ### axis limits and expansion ###
+  ystr.expand <- ", expand=c(0,0)"
+  limsy <- limsy + c(-1,1) * diff(limsy)*a$plot.pGrp.spacing
+  
+  ystr.limits <- as.character(paste('c(',min(limsy), ',', max(limsy),')'))
+  ystr.limits <- paste(", limits=", ystr.limits)
+  
+  pl <- pl + theme(panel.spacing = unit(0, "lines"))
+  
+  
+  # if (any(is.na(limsy)) | a$median.row) y.limits <- FALSE else y.limits <- TRUE
+  
+  
+  # put it all together and execute the eval call
+  ystr <- paste("scale_y_continuous(", ystr.title, ystr.expand, ystr.breaks)
+  # if (y.limits) ystr <- paste(ystr, ystr.limits)
+  ystr <- paste(ystr, ")")
+  
+  pl <- pl + eval(parse(text=ystr))
+  
+  
+  ##############
+  ### border ###   
+  ##############
+  
+  borderx <- range(limsx) + c(1,-1) * diff(range(limsx))*.001
+  bordery <- range(limsy) + c(0, -1) * diff(range(limsy))*.001
+  if(!is.null(median.limsy)) median.limsy <- range(median.limsy) - c(0, diff(range(median.limsy))*.001)
+  
+  tmp.border <- data.frame(pGrp=rep(1:max(pl$data$pGrp),each=2), ymin=bordery[1], ymax=bordery[2], 
+                           xmin=borderx[1], xmax=borderx[2])
+  if(a$median.row) tmp.border <- rbind(subset(tmp.border, !pGrp==a$m.pGrp), data.frame(pGrp=a$m.pGrp, ymin=median.limsy[1], ymax=median.limsy[2],
+                                                                                       xmin=borderx[1], xmax=borderx[2]))
+  
+  if(border) border.color <- a[[i]]$graph.border.color else border.color <- NA
+  pl <- pl + geom_rect(aes(xmin = xmin, xmax=xmax, ymin=ymin, ymax=ymax), data=tmp.border, 
+                       colour= border.color, fill=NA)
+  
+  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  #       HERE I COMMENT OUT THE LINE THAT MAKES THE AXIS LINES DISAPPER/BLANK
+  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  # pl <- pl + theme(axis.line = element_blank())
+  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  
+  pl 
+  
+}
+
+assignInNamespace("axis_opts", axis_opts, ns = "micromap")
+```
+
+
+###  `labels_build()` update  
+
+Modify the labels panel type plotting to accommodate parsed text in the elevation band meta data column of the micromap.  
+
+```{r}
+labels_build <- function(pl, p, DF, att){ 
+  
+  DF$tmp.labels <- DF[,unlist(att[[p]]$panel.data)]
+  
+  #** The defaults are set up so that the text will, in theory, cover the entire 
+  #** width of the panel, whiel maximizing text height as well
+  #** With the way the defaults are set up. default text size needs to be doubled
+  tmp.tsize <- att[[p]]$text.size*4
+  DF$tmp.y <- -DF$pGrpOrd*att[[p]]$text.size
+  tmp.limsy <- c((min(-DF$pGrpOrd)-.5)*att[[p]]$text.size, 
+                 (max(-DF$pGrpOrd)+.5)*att[[p]]$text.size)
+  
+  mln <- max(nchar(as.character(DF$tmp.labels)))
+  if (att[[p]]$align=='right') {
+    tmp.limsx <- c(-mln,0)
+    DF$tmp.adj <- 1
+  }
+  if (att[[p]]$align=='left') {
+    tmp.limsx <- c(0,mln)
+    DF$tmp.adj <- 0
+  }
+  if (att[[p]]$align=='center') {
+    tmp.limsx <- c(-mln/2,mln/2)
+    DF$tmp.adj <- .5
+  }
+  
+  
+  #################################
+  #################################
+  #*** insert space for median row	
+  tmp.median.limsy <- NULL
+  
+  if(att$median.row) {
+    if(!any(DF$median)) DF <- rbind(DF, transform(DF[1,], pGrpOrd=1, pGrp=att$m.pGrp, median=TRUE, 
+                                                  rank='', tmp.y=-att[[p]]$text.size,
+                                                  tmp.labels=''))
+    
+    
+    tmp.median.limsy <- att[[p]]$text.size*c(-1.5,-.5)
+  }
+  
+  
+  #################################
+  #################################
+  
+  
+  pl <- 
+    ggplot(DF) +
+    geom_text(aes(x=0, y=tmp.y, label=tmp.labels, 
+                  hjust=tmp.adj, vjust=.4),
+              # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+              # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+              #   HERE IS WHERE I ADDED `parse = TRUE` to allow an italic "n"
+              # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+              # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+              parse = TRUE,
+              # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+              # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+              #   END OF MODIFICAITON OF THIS FUNCTION
+              # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+              # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+              family=att[[p]]$text.font, fontface=att[[p]]$text.face, size=tmp.tsize) +
+    facet_grid(pGrp~., scales="free_y", space="free") +
+    scale_colour_manual(values=att$colors) 
+  
+  pl <- plot_opts(p, pl, att)		
+  pl <- graph_opts(p, pl, att)		
+  pl <- axis_opts(p, pl, att, limsx=tmp.limsx, limsy=c(tmp.limsy,tmp.median.limsy), border=FALSE) +
+    
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # ADDED THIS SO THAT THE LABELS DON'T HAVE AXES AND TICKS
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    theme(axis.line = element_blank(), axis.ticks = element_blank())
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    
+  
+  pl
+
+}
+
+assignInNamespace("labels_build", labels_build, ns = "micromap")
+
+```
+
+###  `box_summary_build()` update  
+
+Modify the box summary panel building function to accommodate FWS formatting.  
+
+```{r}
+box_summary_build <- function(pl, p, DF, att){ 
+  if(length(att[[p]]$panel.data)==5) iCols <- c(1,2,2,3,4,4,5) else iCols <- 1:7
+  tmp.data <- DF[,unlist(att[[p]]$panel.data)]
+  tmp.data <- tmp.data[,iCols]
+  names(tmp.data) <- paste('tmp.data',1:7,sep='')
+  DF <- cbind(DF, tmp.data)
+  
+  DF$tmp.adj <- att[[p]]$graph.bar.size
+  
+  tmp.limsx <- range(DF[,unlist(att[[p]]$panel.data)], na.rm=T)
+  if(any(!is.na(att[[p]]$xaxis.ticks))) tmp.limsx <- range(c(tmp.limsx, att[[p]]$xaxis.ticks))
+  tmp.limsx <- tmp.limsx + c(-1,1) * diff(tmp.limsx)*.05
+  tmp.limsy <- -(range(DF$pGrpOrd) + c(-1,1) * .5)
+  
+  
+  ncolors <- length(att$colors)
+  #################################
+  #################################
+  #*** insert space for median row	
+  tmp.median.limsy <- NULL
+  
+  
+  if(att$median.row) {
+    if(!any(DF$median)) DF <- rbind(DF, transform(DF[1,], pGrpOrd=ncolors+1, pGrp=att$m.pGrp, median=TRUE, rank='', 
+                                                  tmp.data1=median(DF$tmp.data1), 
+                                                  tmp.data2=median(DF$tmp.data2), 
+                                                  tmp.data3=median(DF$tmp.data3), 
+                                                  tmp.data4=median(DF$tmp.data4), 
+                                                  tmp.data5=median(DF$tmp.data5), 
+                                                  tmp.data6=median(DF$tmp.data6), 
+                                                  tmp.data7=median(DF$tmp.data7)))
+    
+    
+    DF$color[DF$median] <- ncolors
+    tmp.median.limsy <- c(-.5, -1.5)	# c(0, -2)
+  }
+  
+  #################################
+  #################################
+  
+  pl  <- 
+    ggplot(DF) +
+    geom_errorbarh(aes(xmin=tmp.data1, xmax=tmp.data7, y=-pGrpOrd), 
+                   height=.9*att[[p]]$graph.bar.size) + 
+    geom_rect(aes(xmin=tmp.data2, ymin=-pGrpOrd-(tmp.adj/4), 
+                  xmax=tmp.data5, ymax=-pGrpOrd+(tmp.adj/4), 
+                  fill=factor(color), colour='black')) +
+    geom_rect(aes(xmin=tmp.data3, ymin=-pGrpOrd-(tmp.adj/2), 
+                  xmax=tmp.data6, ymax=-pGrpOrd+(tmp.adj/2), 
+                  fill=factor(color), colour='black')) +
+    geom_segment(aes(x=tmp.data4, y=-pGrpOrd-(tmp.adj/2), 
+                     xend=tmp.data4, yend=-pGrpOrd+(tmp.adj/2)), colour='black') +
+    facet_grid(pGrp~., scales="free_y", 
+               #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+               #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+               #   ADDED THESE AXES FORMATS FOR FWS
+               #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+               #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+               axes = "all_x", 
+               axis.labels = "margins",
+               #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+               #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+               space="free") +
+    scale_colour_manual(values='black', guide='none') +
+    scale_fill_manual(values=att$colors, guide='none')
+  
+  
+  if(att[[p]]$median.line) pl <- pl + geom_vline(aes(xintercept = median(tmp.data)), data=DF, 
+                                                 colour=att[[p]]$median.line.col, 
+                                                 linetype = att[[p]]$median.line.typ, 
+                                                 linewidth = att[[p]]$median.line.size)
+  
+  if(!any(is.na(att[[p]]$add.line))){
+    if(length(att[[p]]$add.line.col)==1) att[[p]]$add.line.col <- rep(att[[p]]$add.line.col[1], length(att[[p]]$add.line))
+    if(length(att[[p]]$add.line.typ)==1) att[[p]]$add.line.typ <- rep(att[[p]]$add.line.typ[1], length(att[[p]]$add.line))
+    if(length(att[[p]]$add.line.size)==1) att[[p]]$add.line.size <- rep(att[[p]]$add.line.size[1], length(att[[p]]$add.line))
+    
+    for(j in 1:length(att[[p]]$add.line)) pl <- pl + geom_vline(xintercept = att[[p]]$add.line[j], 
+                                                                colour=att[[p]]$add.line.col[j], 
+                                                                linetype=att[[p]]$add.line.typ[j],
+                                                                linewidth=att[[p]]$add.line.size[j])
+  }
+  
+  
+  pl <- plot_opts(p, pl, att)		
+  pl <- graph_opts(p, pl, att)		
+  pl <- axis_opts(p, pl, att, limsx=tmp.limsx, limsy=c(tmp.limsy,tmp.median.limsy), expx=FALSE)
+  #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  # added theme details here for x-axis and ticks
+  #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  pl <- pl + theme(axis.line.x = element_line(color = "black"),
+                   axis.line.y = element_line(color = "black"),
+                   axis.ticks.x = element_line(color = "black"),
+                   axis.ticks.y = element_blank(),
+                   axis.text.y = element_blank(),
+                   axis.title.y = element_blank())
+  #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  
+  pl
+}
+
+assignInNamespace("box_summary_build", box_summary_build, ns = "micromap")
+```
+
+
+###  `bar_cl_build()` update  
+
+Modify the bar plot panel building function to accommodate FWS formatting.  
+
+```{r}
+bar_cl_build <- function(pl, p, DF, att){ 
+  DF$tmp.data1 <- DF[,att[[p]]$panel.data[[1]]]
+  DF$tmp.data2 <- DF[,att[[p]]$panel.data[[2]]]
+  DF$tmp.data3 <- DF[,att[[p]]$panel.data[[3]]]
+  
+  DF$tmp.adj <- att[[p]]$graph.bar.size
+  
+  tmp.limsx <- range(c(0, DF[,unlist(att[[p]]$panel.data)], na.rm=T))
+  if(any(!is.na(att[[p]]$xaxis.ticks))) tmp.limsx <- range(c(tmp.limsx, att[[p]]$xaxis.ticks))
+  tmp.limsx <- tmp.limsx + c(-.001,.05) * diff(tmp.limsx)
+  tmp.limsy <- -(range(DF$pGrpOrd) + c(-1,1) * .5)
+  
+  
+  ncolors <- length(att$colors)
+  #################################
+  #################################
+  #*** insert space for median row	
+  tmp.median.limsy <- NULL
+  
+  if(att$median.row) {
+    if(!any(DF$median)) DF <- rbind(DF, transform(DF[1,], pGrpOrd=ncolors+1, pGrp=att$m.pGrp, median=TRUE, rank='', 
+                                                  tmp.data1=median(DF$tmp.data1),
+                                                  tmp.data2=median(DF$tmp.data2),
+                                                  tmp.data3=median(DF$tmp.data3)))
+    
+    
+    DF$color[DF$median] <- ncolors
+    tmp.median.limsy <- c(-.5, -1.5)
+  }
+  
+  #################################
+  #################################
+  
+  pl  <- 
+    ggplot(DF) +
+    geom_rect(aes(xmin=0, ymin=-pGrpOrd-(tmp.adj/2), 
+                  xmax=tmp.data1, ymax=-pGrpOrd+(tmp.adj/2), 
+                  fill=factor(color), colour='black')) +
+    geom_errorbarh(aes(xmin=tmp.data2, xmax=tmp.data3, y=-pGrpOrd), 
+                   height=.9*att[[p]]$graph.bar.size) + 
+    theme_classic() +
+    facet_grid(pGrp~., scales="free_y", 
+               #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+               #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+               #   ADDED THESE AXES FORMATS FOR FWS
+               #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+               #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+               axes = "all_x", 
+               axis.labels = "margins",
+               #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+               #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+               space="free") +
+    scale_colour_manual(values='black', guide='none') +
+    scale_fill_manual(values=att$colors, guide='none')
+  
+  
+  if(att[[p]]$median.line) pl <- pl + geom_vline(aes(xintercept = median(tmp.data)),
+                                                 colour=att[[p]]$median.line.col, 
+                                                 linetype = att[[p]]$median.line.typ, 
+                                                 linewidth = att[[p]]$median.line.size)
+  
+  if(!any(is.na(att[[p]]$add.line))){
+    if(length(att[[p]]$add.line.col)==1) att[[p]]$add.line.col <- rep(att[[p]]$add.line.col[1], length(att[[p]]$add.line))
+    if(length(att[[p]]$add.line.typ)==1) att[[p]]$add.line.typ <- rep(att[[p]]$add.line.typ[1], length(att[[p]]$add.line))
+    if(length(att[[p]]$add.line.size)==1) att[[p]]$add.line.size <- rep(att[[p]]$add.line.size[1], length(att[[p]]$add.line))
+    
+    for(j in 1:length(att[[p]]$add.line)) pl <- pl + geom_vline(xintercept = att[[p]]$add.line[j], 
+                                                                colour=att[[p]]$add.line.col[j], 
+                                                                linetype=att[[p]]$add.line.typ[j],
+                                                                linewidth=att[[p]]$add.line.size[j])
+  }
+  
+  
+  pl <- plot_opts(p, pl, att)		
+  pl <- graph_opts(p, pl, att)
+  pl <- axis_opts(p, pl, att, limsx=tmp.limsx, limsy=c(tmp.limsy, tmp.median.limsy), expx=FALSE)
+  #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  # added theme details here for x-axis and ticks
+  #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  pl <- pl + theme(axis.line.x = element_line(color = "black"),
+                   axis.line.y = element_line(color = "black"),
+                   axis.ticks.x = element_line(color = "black"),
+                   axis.ticks.y = element_blank(),
+                   axis.text.y = element_blank(),
+                   axis.title.y = element_blank(),
+                   axis.text.x = element_text(angle = 25, hjust = 1))
+  #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  
+  pl
+}
+
+assignInNamespace("bar_cl_build", bar_cl_build, ns = "micromap")
+```
+
+
+
+### `CatMaps2()` update from `CatMaps()`  
+
+Modify the `CatMaps()` function and rename as `CatMaps2()` to accommodate FWS formatting.  
+
+```{r}
+CatMaps2 <- function(pl, p, mapDF, att) {
+  bgcolor <- ifelse(!is.na(att[[p]]$panel.bgcolor), att[[p]]$panel.bgcolor, "white")
+  
+  # Keep only mapped features with a panel-group assignment
+  mapDF_active <- subset(mapDF, !is.na(pGrp))
+  
+  # All features drawn in every facet as inactive background
+  mapDF_all <- transform(mapDF, pGrp = NULL)
+  
+  pl <- ggplot(mapDF_active, aes(x = coordsx, y = coordsy, group = poly)) +
+    # Inactive background: all features in every facet
+    geom_polygon(
+      data = mapDF_all,
+      fill = "lightgrey",
+      colour = "lightgrey"
+    ) +
+    # Active features for the current facet/group
+    geom_polygon(
+      data = subset(mapDF_active, hole == 0),
+      fill = "black",
+      colour = "black"
+    ) +
+    # Holes inside active polygons
+    geom_polygon(
+      data = subset(mapDF_active, hole == 1),
+      fill = "white",
+      colour = "black"
+    ) +
+    # Preserve hole outlines
+    geom_polygon(
+      data = subset(transform(mapDF_active, pGrp = NULL), hole == 1),
+      fill = "transparent",
+      colour = "black"
+    ) +
+    facet_grid(pGrp ~ ., scales = "free_y", space = "free") +
+    coord_cartesian(default = TRUE)
+  
+  bdrCoordsy <- att[[p]]$bdrCoordsy
+  bdrCoordsy <- bdrCoordsy + c(1, -1) * diff(bdrCoordsy) * att$plot.pGrp.spacing
+  bdrCoordsy <- bdrCoordsy + c(0, -1) * diff(range(bdrCoordsy)) * 0.001
+  
+  bdrCoordsx <- att[[p]]$bdrCoordsx
+  bdrCoords <- data.frame(
+    coordsx = bdrCoordsx,
+    coordsy = bdrCoordsy,
+    pGrp = NA,
+    poly = NA
+  )
+  
+  pl <- pl + geom_point(
+    fill = bgcolor,
+    size = 0.001,
+    colour = bgcolor,
+    data = transform(bdrCoords, pGrp = NULL)
+  )
+  
+  xstr.title <- "''"
+  if (!all(is.na(all_atts(att, "xaxis.title")))) {
+    tmp.titles <- lapply(all_atts(att, "xaxis.title"), function(t) {
+      if (is.na(t) | t == "") " " else t
+    })
+    tmp.title <- tmp.titles[[p]]
+    ns <- max(unlist(lapply(tmp.titles, function(x) length(strsplit(x, "\n")[[1]])))) -
+      length(strsplit(tmp.title, "\n")[[1]])
+    if (ns > 0) tmp.title <- paste(tmp.title, rep(" \n ", ns), sep = "")
+    xstr.title <- paste("'", tmp.title, "'", sep = "")
+    
+    pl <- pl + theme(
+      axis.title.x = element_text(size = 8 * att[[p]]$xaxis.title.size, colour = bgcolor)
+    )
+  } else {
+    pl <- pl + theme(axis.title.x = element_blank())
+  }
+  
+  if (any(c(all_attsb(att, "xaxis.ticks.display"), all_attsb(att, "xaxis.text.display")))) {
+    pl <- pl +
+      theme(axis.text.x = element_text(colour = bgcolor)) +
+      theme(axis.ticks = element_line(colour = bgcolor))
+  } else {
+    pl <- pl +
+      theme(axis.text.x = element_blank()) +
+      theme(axis.ticks = element_blank())
+  }
+  
+  ystr <- "scale_y_continuous('', breaks=NULL, expand=c(0,0))"
+  pl <- pl + eval(parse(text = ystr))
+  
+  pl <- plot_opts(p, pl, att)
+  pl <- graph_opts(p, pl, att)
+  pl <- pl + theme(panel.spacing = unit(0, "lines"))
+  
+  pl
+}
+```
+
+
+
+### `mmgroupedplot2()` modification from `mmgroupedplot()`  
+
+Modify the `mmgroupedplot()` function and rename as `mmgroupedplot2()` to accommodate FWS formatting.  
+
+`mmgroupedplot2()` depends on `CatMaps2()` above.  
+
+```{r}
+mmgroupedplot2 <- function(stat.data, map.data, panel.types, panel.data,
+                           map.link = NULL,
+                           nPanels = length(panel.types),
+                           grp.by, cat,
+                           colors = brewer.pal(10, "Spectral"),
+                           map.color = "lightyellow",
+                           map.all = FALSE,
+                           print.file = "no",
+                           print.res = NA,
+                           panel.att = vector("list", nPanels),
+                           plot.header = NA,
+                           plot.header.size = NA,
+                           plot.header.color = NA,
+                           plot.footer = NA,
+                           plot.footer.size = NA,
+                           plot.footer.color = NA,
+                           footer.grid.unit.y.adj = 0.0225, 
+                           footer.grid.viewport.height = 0.9775,
+                           footer.grid.viewport.y = 0.505,
+                           plot.width = 7,
+                           plot.height = 7,
+                           map.spacing = 1,
+                           plot.grp.spacing = 1,
+                           plot.panel.spacing = 1,
+                           plot.panel.margins = c(0, 0, 1, 0)) {
+
+  dStats <- stat.data
+  dMap <- map.data
+
+  ncol <- length(unique(stat.data[, cat]))
+  colors <- colorRampPalette(colors)(ncol)
+
+  tPlot.header <- plot.header
+  iPlot.header.size <- plot.header.size
+  tPlot.header.color <- plot.header.color
+  tPlot.footer <- plot.footer
+  iPlot.footer.size <- plot.footer.size
+  tPlot.footer.color <- plot.footer.color
+
+  pps <- plot.panel.spacing * 0.05
+
+  plot.atts <- list(
+    plot.grp.spacing = plot.grp.spacing * 0.05,
+    plot.pGrp.spacing = plot.grp.spacing * 0.05,
+    plot.panel.margins = plot.panel.margins,
+    grp.by = grp.by,
+    colors = colors,
+    map.color = map.color,
+    map.spacing = map.spacing * 0.025,
+    plot.width = plot.width,
+    plot.height = plot.height
+  )
+  
+  a <- vector("list", nPanels)
+  
+  ns <- asNamespace("micromap")
+  
+  for (p in 1:nPanels) {
+    att.name <- paste(panel.types[p], "_att", sep = "")
+    if (exists(att.name, envir = ns, mode = "function")) {
+      a[[p]] <- get(att.name, envir = ns)()
+    } else {
+      a[[p]] <- get("standard_att", envir = ns)()
+    }
+  }
+  
+  a <- append(a, plot.atts)
+  
+  for (j in 1:length(panel.types)) {
+    a[[j]] <- append(a[[j]], list(panel.data = unlist(panel.data[[j]])))
+  }
+
+  for (j in 1:length(panel.att)) {
+    k <- unlist(panel.att[[j]][1], use.names = FALSE)
+    for (s in names(panel.att[[j]])[-1]) {
+      w <- match(s, right(names(a[[k]]), nchar(s)))
+      if (is.na(w)) {
+        w <- match(paste("panel.", s, sep = ""), names(a[[k]]))
+      }
+      if (!is.na(w)) {
+        a[[k]][[w]] <- unlist(panel.att[[j]][s], use.names = FALSE)
+      } else {
+        print(paste("attribute:", s, "is not recognized for panel", j))
+      }
+      if (!is.null(k)) {
+        w <- match("left.margin", names(a[[k]]))
+        if (!is.na(w) & !is.na(a[[k]][[w]])) {
+          a[[k]]$panel.margins[4] <- a[[k]]$panel.margins[4] + a[[k]][[w]]
+        }
+        w <- match("right.margin", names(a[[k]]))
+        if (!is.na(w) & !is.na(a[[k]][[w]])) {
+          a[[k]]$panel.margins[2] <- a[[k]]$panel.margins[2] + a[[k]][[w]]
+        }
+      }
+    }
+  }
+
+  DF <- create_DF_cat(dStats, grp.by, cat)
+
+  a$median.row <- FALSE
+  a$two.ended.maps <- FALSE
+  a$m.pGrp <- (max(DF$pGrp) + 1) / 2
+  a$m.rank <- NA
+
+  DF.hold <- DF
+
+  if (any(panel.types == "map")) {
+    w <- match(dMap[, map.link[2]], unique(DF[, map.link[1]]))
+
+    if (!map.all) {
+      mapDF <- dMap[!is.na(w), ]
+    } else {
+      mapDF <- dMap
+    }
+
+    if (!"hole" %in% names(mapDF)) mapDF$hole <- 0
+    if (!"plug" %in% names(mapDF)) mapDF$plug <- 0
+
+    tmpDF <- unique(DF[, c("pGrp", "pGrpOrd", map.link[1])])
+    w <- match(mapDF[, map.link[2]], tmpDF[, map.link[1]])
+
+    ## FIXED: use tmpDF, not DF
+    mapDF <- cbind(pGrp = tmpDF[w, "pGrp"], mapDF)
+    mapDF <- cbind(pGrpOrd = tmpDF[w, "pGrpOrd"], mapDF)
+
+    mapPanelWidth <- as.numeric(a[[which(panel.types == "map")]]$panel.width)
+    totalUnitWidth <- pps * (length(all_atts(a, "panel.width")) + 1) +
+      sum(as.numeric(all_atts(a, "panel.width")))
+
+    mapPanelHeight <- max(DF$pGrpOrd[!is.na(DF$pGrpOrd)]) + 0.5
+    totalUnitHeight <- max(DF$pGrp[!is.na(DF$pGrp)]) * mapPanelHeight
+
+    ns <- max(unlist(lapply(all_atts(a, "panel.header"),
+                            function(x) length(strsplit(x, "\n")[[1]]))))
+
+    adj.plot.height <- plot.height - ns * 0.2 +
+      any(!is.na(all_atts(a, "xaxis.title"))) * 0.1 + 0.2 + 0.5
+
+    plot.h2w.ratio <- (mapPanelHeight / totalUnitHeight * adj.plot.height) /
+      (mapPanelWidth / totalUnitWidth * plot.width)
+
+    nYrows <- diff(range(mapDF$pGrpOrd[!is.na(mapDF$pGrpOrd)]) + c(-1, 1) * 0.5)
+    nXcols <- nYrows / plot.h2w.ratio
+
+    limitingAxis <- ifelse(
+      diff(range(mapDF$coordsy)) / diff(range(mapDF$coordsx)) > plot.h2w.ratio,
+      "y", "x"
+    )
+
+    if (limitingAxis == "y") {
+      redFact <- diff(range(mapDF$coordsy)) / nYrows
+      mapDF$coordsy <- (mapDF$coordsy - median(range(mapDF$coordsy))) /
+        diff(range(mapDF$coordsy)) * nYrows
+      mapDF$coordsx <- (mapDF$coordsx - median(range(mapDF$coordsx))) / redFact
+    }
+
+    if (limitingAxis == "x") {
+      redFact <- diff(range(mapDF$coordsx)) / nXcols
+      mapDF$coordsx <- (mapDF$coordsx - median(range(mapDF$coordsx))) /
+        diff(range(mapDF$coordsx)) * nXcols
+      mapDF$coordsy <- (mapDF$coordsy - median(range(mapDF$coordsy))) / redFact
+    }
+
+    a[[which(panel.types == "map")]]$bdrCoordsy <- c(-1, 1) * nYrows / 2
+    a[[which(panel.types == "map")]]$bdrCoordsx <- c(-1, 1) * nXcols / 2
+
+    rm(tmpDF, dMap)
+  }
+
+  plots <- vector("list", nPanels)
+
+  for (p in 1:nPanels) {
+    if (panel.types[p] == "map") {
+      plots[[p]] <- CatMaps2(plots[[p]], p, mapDF, a)
+    } else if (exists(as.character(paste(panel.types[p], "_build", sep = "")))) {
+      plots[[p]] <- eval(parse(text = paste(panel.types[p],
+                                            "_build(plots[[p]], p, DF, a)", sep = "")))
+    } else {
+      stop(paste("unknown panel type -- '", panel.types[p], "'", sep = ""))
+    }
+    DF <- DF.hold
+  }
+
+  lwidth <- pps
+  for (w in 1:length(all_atts(a, "panel.width"))) {
+    lwidth <- c(lwidth, all_atts(a, "panel.width")[w], pps)
+  }
+
+  lmLayout <- grid.layout(
+    nrow = 1,
+    ncol = length(lwidth),
+    widths = unit(lwidth, rep("null", length(lwidth))),
+    heights = unit(rep(1, length(lwidth)), rep("null", length(lwidth)))
+  )
+
+  plots$layout <- lmLayout
+  plots$plot.width <- plot.width
+  plots$plot.height <- plot.height
+  plots$plot.footer <- plot.footer
+  plots$plot.footer.size <- plot.footer.size
+  plots$plot.footer.color <- plot.footer.color
+                           
+  class(plots) <- "mm"
+
+  if (print.file == "no") print.file <- NULL
+
+  print.mm2(plots, name = print.file, res = print.res,
+            footer.grid.unit.y.adj = footer.grid.unit.y.adj, 
+            footer.grid.viewport.height = footer.grid.viewport.height,
+            footer.grid.viewport.y = footer.grid.viewport.y
+  )
+  invisible(plots)
+}
+
+# assignInNamespace("mmgroupedplot2", mmgroupedplot2, ns = "micromap")
+```
+
+###  `print.mm2()` update from `print.mm()`  
+
+Modify the `print.mm()` function and rename as `print.mm2()` to accommodate FWS formatting.  
+
+```{r}
+print.mm2 <- function(x, name = NULL, res = 600, 
+                      footer.grid.unit.y.adj = 0.0225, 
+                      footer.grid.viewport.height = 0.9775,
+                      footer.grid.viewport.y = 0.505,
+                      ...) {
+  plobject <- x
+  file.name <- print.file <- name
+  recognized.print.type <- FALSE
+  
+  if (!is.null(name)) {
+    recognized.print.type <- grepl("\\.(pdf|tiff|tif|jpeg|jpg|png|ps|eps)$",
+                                   print.file, ignore.case = TRUE)
+  }
+  
+  if (!is.null(name)) {
+    if (right(print.file, 4) == '.pdf') {
+      pdf(print.file,
+          width = plobject$plot.width,
+          height = plobject$plot.height)
+    }
+    
+    if (right(print.file, 5) == '.tiff') {
+      tiff(print.file,
+           width = plobject$plot.width,
+           height = plobject$plot.height,
+           units = 'in',
+           res = res)
+    }
+    
+    if (right(print.file, 4) == '.tif') {
+      tiff(print.file,
+           width = plobject$plot.width,
+           height = plobject$plot.height,
+           units = 'in',
+           res = res)
+    }
+    
+    if (right(print.file, 5) == '.jpeg') {
+      jpeg(print.file,
+           width = plobject$plot.width,
+           height = plobject$plot.height,
+           units = 'in',
+           res = res)
+    }
+    
+    if (right(print.file, 4) == '.jpg') {
+      jpeg(print.file,
+           width = plobject$plot.width,
+           height = plobject$plot.height,
+           units = 'in',
+           res = res)
+    }
+    
+    if (right(print.file, 4) == '.png') {
+      png(print.file,
+          width = plobject$plot.width,
+          height = plobject$plot.height,
+          units = 'in',
+          res = res)
+    }
+    
+    if (right(print.file, 3) == '.ps') {
+      postscript(print.file,
+                 width = plobject$plot.width,
+                 height = plobject$plot.height,
+                 family = 'sans')
+      for (p in 1:(length(plobject) - 3)) {
+        plobject[[p]] <- plobject[[p]] +
+          ggplot2::theme(text = ggplot2::element_text(family = 'sans'))
+      }
+    }
+    
+    if (right(print.file, 4) == '.eps') {
+      # postscript(print.file,
+      #            width = plobject$plot.width,
+      #            height = plobject$plot.height,
+      #            horizontal = FALSE,
+      #            onefile = FALSE,
+      #            paper = "special",
+      #            family = 'sans')
+      grDevices::cairo_ps(
+        filename = print.file,
+        width = plobject$plot.width,
+        height = plobject$plot.height,
+        onefile = FALSE,
+        family = "sans",
+        fallback_resolution = res
+      )
+      for (p in 1:(length(plobject) - 3)) {
+        plobject[[p]] <- plobject[[p]] +
+          ggplot2::theme(text = ggplot2::element_text(family = 'sans'))
+      }
+    }
+    
+    if (!recognized.print.type) {
+      print("Warning: printing file type not recognized")
+    }
+  }
+  
+  grid::grid.newpage()
+  
+  # Leave a little room at the bottom for footer
+  grid::pushViewport(
+    grid::viewport(
+      x = 0.5, footer.grid.viewport.y,
+      width = 1,
+      footer.grid.viewport.height,
+      just = c("center", "center"),
+      layout = plobject$layout
+    )
+  )
+  
+  # suppressWarnings(
+  #   for (p in 1:(length(plobject) - 3)) {
+  #     print(plobject[[p]], vp = subplot(1, p * 2))
+  #   }
+  # )
+  
+  # MRF added
+  # for (p in 1:(length(plobject) - 3)) {
+  #   invisible(utils::capture.output({
+  #     suppressWarnings(
+  #       print(plobject[[p]], vp = subplot(1, p * 2))
+  #     )
+  #   }))
+  # }
+  for (p in 1:(length(plobject) - 3)) {
+    suppressWarnings(
+      print(plobject[[p]], vp = subplot(1, p * 2), newpage = FALSE)
+    )
+  }
+  # end MRF add
+  
+  grid::upViewport(0)
+  
+  if (!is.null(plobject$plot.footer) &&
+      !is.na(plobject$plot.footer) &&
+      nzchar(plobject$plot.footer)) {
+    
+    footer_size <- ifelse(
+      is.null(plobject$plot.footer.size) || is.na(plobject$plot.footer.size),
+      10,
+      plobject$plot.footer.size * 10
+    )
+    
+    footer_col <- ifelse(
+      is.null(plobject$plot.footer.color) || is.na(plobject$plot.footer.color),
+      "black",
+      plobject$plot.footer.color
+    )
+    
+    grid::grid.text(
+      label = plobject$plot.footer,
+      x = 0.5,
+      y = grid::unit(footer.grid.unit.y.adj, "npc"),
+      just = c("center", "bottom"),
+      gp = grid::gpar(fontsize = footer_size, col = footer_col)
+    )
+  }
+  
+  if (recognized.print.type && !is.null(name)) dev.off()
+  
+  invisible(x)  # MRF added
+}
+```
+
+
+## Data set conditioning for micromap plots  
+
+```{r}
+# Define band breaks and labels
+band_breaks <- elevation_breaks
+band_labels <- elevation_labels
+# band_cols <- viridisLite::viridis(n_bands, option = "C")  # or viridis::viridis
+
+# Assign band to each stream segment; clamp to [0,800]
+streams_banded <- ma_streams_sf |> 
+  filter(!is.na(ssnid)) |> 
+  mutate(elev_m = pmax(0, pmin(800, v2elevm)),
+         elev_band = cut(
+           elev_m,
+           breaks = band_breaks,
+           include.lowest = TRUE,
+           right = TRUE,
+           labels = band_labels
+         )) |>
+  # Segment lengths in meters (in EPSG:26986) and km for reporting
+  mutate(seg_len_m = as.numeric(st_length(geometry)),
+         seg_len_km = seg_len_m / 1000)
+
+# Buffer lines to thin polygons (30 m either side); simplify for speed
+streams_poly <- streams_banded %>%
+  st_buffer(dist = 30) %>%             # adjust width as needed for legibility
+  ms_simplify(keep = 0.05, keep_shapes = TRUE) %>%  # rmapshaper simplification
+  mutate(ID = elev_band)               # micromap expects an 'ID' to link map<->stat
+
+# Convert to micromap flat table (ID; coordsx, coordsy; poly indexes)
+# Convert sf -> sp (SpatialPolygonsDataFrame) to work with 'create_map_table()'
+map_table <- create_map_table(sf::as_Spatial(streams_poly), 
+                              IDcolumn = "ID", poly.thresh = 1e-4)
+```
+
+
+## Micromap Plots  
+
+
+### Fig 2. Temperature boxplot micromap  
+
+
+```{r}
+# boxplot 5-point stat for micromap box summary plot
+stats_long <- streams_banded %>%
+  st_drop_geometry() %>%
+  select(elev_band, starts_with("Tw_")) %>%
+  pivot_longer(cols = starts_with("Tw_"),
+               names_to = "scenario", values_to = "temp_c") %>%
+  filter(temp_c < threshold_temp_max) |>
+  group_by(elev_band, scenario) %>%
+  summarise(
+    x_min    = min(temp_c, na.rm = TRUE),
+    x_q1     = quantile(temp_c, 0.25, na.rm = TRUE, names = FALSE),
+    x_median = median(temp_c, na.rm = TRUE),
+    x_mean   = mean(temp_c, na.rm = TRUE),
+    x_q3     = quantile(temp_c, 0.75, na.rm = TRUE, names = FALSE),
+    x_max    = max(temp_c, na.rm = TRUE),
+    .groups  = "drop"
+  )
+
+# Wide matrices of five-number summaries per scenario (prefixes for clarity)
+stats_wide <- stats_long %>%
+  pivot_wider(
+    names_from  = scenario,
+    values_from = c(x_min, x_q1, x_median, x_mean, x_q3, x_max)
+  )
+
+# Add counts/length for labels
+band_counts <- streams_banded %>%
+  st_drop_geometry() %>%
+  select(ssnid, elev_band, seg_len_m, starts_with("Tw_")) %>%
+  pivot_longer(cols = starts_with("Tw_"),
+               names_to = "scenario",
+               values_to = "temp_c") %>%
+  filter(temp_c < threshold_temp_max) |>
+  group_by(elev_band, scenario) %>%
+  summarise(
+    n_segments   = n(),
+    total_km     = sum(seg_len_m, na.rm = TRUE) / 1000,
+    .groups = "drop"
+  ) |> ungroup() |>
+  group_by(elev_band) |>
+  summarise(
+    n_segments = max(n_segments),        # same across scenarios
+    total_km   = max(total_km),
+    .groups = "drop"
+  ) 
+
+# Helper to build the five-number column names for a given scenario s
+fn_cols <- function(s) paste0(c("x_min_", "x_q1_", "x_median_", "x_q3_", "x_max_"), s)
+```
+
+```{r}
+# Final stat table (choose median for dot panels; you can swap to mean_)
+stat_df <- band_counts |>
+  left_join(stats_wide, by = "elev_band") |>
+  arrange(elev_band) |>
+  mutate(band_id = elev_band,
+         label   = sprintf("%s m a.s.l.\n%d reaches\n%.1f km",
+                           gsub("-", "\u2013", elev_band),
+                           n_segments, total_km),
+         label_parse = sprintf("atop('%s m a.s.l.', '\n(' * italic(n) * ' = %d, %.1f km)')",
+                               gsub("-", "\u2013", elev_band), n_segments, total_km)
+         # label_parse = if_else(
+         #   elev_band == ">600",
+         #   sprintf("greaterthan(600) * ' m a.s.l.' * '\n(' * italic(n) * ' = %d, %.1f km)'",
+         #           n_segments, total_km),
+         #   sprintf("'%s m a.s.l.' * '\n(' * italic(n) * ' = %d, %.1f km)'",
+         #           gsub("-", "\u2013", elev_band), n_segments, total_km)
+  )
+# ~sub("-", "\u2013", .x)  # replace dash with en-dash
+
+
+# Check actual names present
+# names(stat_df)
+
+# Boxplot formatting options
+boxplot_width <- 0.75
+boxplot_axis_ticks <- seq(10,30, by = 5)
+boxplot_LR_mar <- -0.1
+```
+
+
+```{r}
+stats_df_grouped <- stats_long %>%
+  mutate(
+    Climate = case_when(
+      scenario %in% c("Tw_rcnt","Tw_rcntdam","Tw_rcntshade","Tw_rcntdamshade") ~ "Recent",
+      scenario %in% c("Tw_futr","Tw_futrdam","Tw_futrshade","Tw_futrdamshade") ~ "Future",
+      TRUE ~ NA_character_
+    ),
+    Restoration = case_when(
+      scenario %in% c("Tw_rcnt",        "Tw_futr") ~         "baseline",
+      scenario %in% c("Tw_rcntdam",     "Tw_futrdam") ~      "dam",
+      scenario %in% c("Tw_rcntshade",   "Tw_futrshade") ~    "shade",
+      scenario %in% c("Tw_rcntdamshade","Tw_futrdamshade") ~ "damshade",
+      TRUE ~ NA_character_
+    )
+  ) |>
+  mutate(Climate = factor(Climate, levels = c("Recent","Future")),
+         Restoration = factor(Restoration, 
+                              levels = c("baseline","dam","shade","damshade"))
+         ) |>
+  
+  pivot_wider(id_cols = -scenario,
+    names_from  = Restoration,
+    values_from = c(x_min, x_q1, x_median, x_mean, x_q3, x_max)
+  ) |>
+  left_join(band_counts, by = "elev_band") |>
+  mutate(
+    band_id = elev_band,
+    label_band = sprintf("atop('','%s m a.s.l.')", gsub("-", "\u2013", elev_band)),
+    label_band_deets = sprintf("atop('(' * italic(n) * ' = %d, %.1f km)','')",
+                               n_segments, total_km)
+  ) |>
+  mutate(label = case_when(
+      Climate == "Recent" ~ label_band,
+      Climate == "Future" ~ label_band_deets,
+      TRUE ~ ""
+    )
+    ) |> 
+  mutate(band_id = forcats::fct_rev(band_id)) |>
+  arrange(band_id, Climate) |>
+  data.frame()
+
+```
+
+
+```{r fig.height=8, fig.width=11, warning=FALSE, message=FALSE, results='hide'}
+micromap_box_grouped <- 
+  mmgroupedplot2(
+    stat.data   = stats_df_grouped,
+    map.data    = map_table,
+    panel.types = c("labels","box_summary","box_summary","box_summary","box_summary","map"),
+    panel.data  = list(
+      "label", 
+      fn_cols("baseline"),
+      fn_cols("dam"),
+      fn_cols("shade"),
+      fn_cols("damshade"),
+      NA
+    ),
+    grp.by      = "band_id",           # 
+    cat         = "Climate",
+    # median.row  = FALSE,               # keep map aspect ratio (vignette warns median row can distort maps)
+    map.link    = c("band_id", "ID"),  # stat column <-> map_table ID
+    map.all     = TRUE,                # show entire network; active band highlighted by color
+    colors      = c("white","grey60"),
+    plot.footer = "Mean July stream reach temperature (\u00B0C)",
+    plot.width = 11,
+    plot.height = 8, 
+    # plot.panel.margins = c(10,5,15,5),
+    footer.grid.unit.y.adj = 0.025, 
+    footer.grid.viewport.height = 0.985,
+    footer.grid.viewport.y = 0.5,
+    panel.att   = list(
+      list(1, 
+           header = "Elevation band\n(Reach count, length)", align = "center", 
+           panel.width = 1, text.size = 0.9),
+      list(2,
+           header = 'Climate scenario\n(empty: recent; filled: future)',
+           xaxis.title = "", 
+           graph.bar.size = boxplot_width, 
+           graph.border.color = NA,
+           graph.grid.major = FALSE, graph.grid.minor = FALSE,
+           xaxis.ticks = boxplot_axis_ticks, 
+           xaxis.labels = boxplot_axis_ticks),
+      list(3, 
+           header= "+ Dam removal", 
+           xaxis.title = "", 
+           graph.bar.size = boxplot_width, 
+           graph.border.color = NA,
+           graph.grid.major = FALSE, graph.grid.minor = FALSE,
+           xaxis.ticks = boxplot_axis_ticks, 
+           xaxis.labels = boxplot_axis_ticks),
+      list(4, 
+           header = "+ Shade restoration", 
+           xaxis.title = "", 
+           graph.bar.size = boxplot_width, 
+           graph.border.color = NA,
+           graph.grid.major = FALSE, graph.grid.minor = FALSE,
+           xaxis.ticks = boxplot_axis_ticks, 
+           xaxis.labels = boxplot_axis_ticks),
+      list(5, 
+           header = "+ Dam + shade ",  
+           xaxis.title = "", 
+           graph.bar.size = boxplot_width, 
+           graph.border.color = NA,
+           graph.grid.major = FALSE, graph.grid.minor = FALSE,
+           xaxis.ticks = boxplot_axis_ticks, 
+           xaxis.labels = boxplot_axis_ticks),
+      list(6, 
+           header = "MA river networks\n(active band highlighted)",
+           inactive.fill = "lightgray", inactive.border.color = gray(0.7), panel.width = 1)
+    )
+  )
+```
+
+
+```{r warning=FALSE, message=FALSE, results='hide'}
+# PNG figure file
+print.mm2(micromap_box_grouped, res = 1200, footer.grid.unit.y.adj = 0.025, 
+                      footer.grid.viewport.height = 0.985,
+                      footer.grid.viewport.y = 0.5,
+          name = "../figures/Figure2_boxplot_temps_micromap.png")
+
+# PDF figure file
+print.mm2(micromap_box_grouped, res = 1200, footer.grid.unit.y.adj = 0.025, 
+                      footer.grid.viewport.height = 0.985,
+                      footer.grid.viewport.y = 0.5,
+          name = "../figures/Figure2_boxplot_temps_micromap.pdf")
+```
+
+```{r}
+grDevices::cairo_ps(
+  filename = "../figures/Figure2_boxplot_temps_micromap.eps",
+  width = 11,
+  height = 8,
+  onefile = FALSE,
+  family = "sans"
+)
+
+micromap_box_grouped
+
+dev.off()
+```
+
+
+
+### Fig 4. Cold-water habitat barplot micromap  
+
+```{r}
+# --- Inputs ---
+temp_threshold <- 20
+scenarios <- c(
+  "Tw_rcnt","Tw_rcntdam","Tw_rcntshade","Tw_rcntdamshade",
+  "Tw_futr","Tw_futrdam","Tw_futrshade","Tw_futrdamshade"
+)
+
+# Per band/scenario: total km & km at/below 20°C; robust to NAs
+prop_long <- streams_banded %>%
+  mutate(len_km = seg_len_m / 1000) %>%
+  st_drop_geometry() %>%
+  select(elev_band, len_km, all_of(scenarios)) %>%
+  pivot_longer(cols = all_of(scenarios),
+               names_to = "scenario", values_to = "temp_c") %>%
+  group_by(elev_band, scenario) %>%
+  summarise(
+    total_km  = sum(len_km, na.rm = TRUE),
+    cool_km   = sum(len_km[temp_c <= temp_threshold], na.rm = TRUE),
+    prop_cool = ifelse(total_km > 0, cool_km / total_km, NA_real_),
+    .groups   = "drop"
+  )
+
+# Also compute per-band totals for label: reach count & total length
+band_stats <- streams_banded %>%
+  mutate(len_km = seg_len_m / 1000) %>%
+  st_drop_geometry() %>%
+  group_by(elev_band) %>%
+  summarise(
+    n_reaches = n(),
+    total_km_band = sum(len_km, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Wide table: one row per band with % columns for each scenario
+prop_wide <- prop_long %>%
+  pivot_wider(
+    names_from  = scenario,
+    values_from = c(total_km, cool_km, prop_cool),
+    names_glue  = "{.value}_{scenario}"
+  ) %>%
+  arrange(elev_band) %>%
+  # Band key + label
+  mutate(
+    band_id = elev_band
+  ) %>%
+  left_join(band_stats, by = "elev_band") %>%
+  mutate(
+    label = sprintf("%s\n(n = %d, %.1f km)", elev_band, n_reaches, total_km_band),
+    label_band = sprintf("atop('','%s m a.s.l.')", gsub("-", "\u2013", elev_band)),
+    label_band_deets = sprintf("atop('(' * italic(n) * ' = %d, %.1f km)','')",
+                               n_reaches, total_km_band)
+    )
+
+```
+
+
+```{r}
+# Percent columns: p20_* = 100 * proportion of km <= 20°C
+make_pct_name <- function(s) paste0("p20_", s)
+fn_pct <- function(s) make_pct_name(s)
+
+stat_df_prop <- prop_wide %>%
+  mutate(across(starts_with("prop_cool_"), ~ .x * 100) )
+
+
+for (s in scenarios) {
+  stat_df_prop[[make_pct_name(s)]] <- stat_df_prop[[paste0("prop_cool_", s)]]
+}
+
+
+ticks_pct <- c(0, 25, 50, 75, 100)
+```
+
+
+
+```{r fig.height=8, fig.width=13}
+stat_df_grouped <- stat_df_prop %>%
+  # mutate(Category = elev_band) %>%
+  select(
+    label, label_band, label_band_deets, band_id,
+    p20_Tw_rcnt,         p20_Tw_futr,
+    p20_Tw_rcntdam,      p20_Tw_futrdam,
+    p20_Tw_rcntshade,    p20_Tw_futrshade,
+    p20_Tw_rcntdamshade, p20_Tw_futrdamshade
+  ) |>
+  pivot_longer(
+    cols = starts_with("p20_"),
+    names_to = "scenario",
+    values_to = "percent"
+  ) |>
+  mutate(
+    Climate = case_when(
+      scenario %in% c("p20_Tw_rcnt", "p20_Tw_rcntdam", "p20_Tw_rcntshade", "p20_Tw_rcntdamshade") ~ "Recent",
+      scenario %in% c("p20_Tw_futr", "p20_Tw_futrdam", "p20_Tw_futrshade", "p20_Tw_futrdamshade") ~ "Future",
+      TRUE ~ NA_character_
+    ),
+    Restoration = case_when(
+      scenario %in% c("p20_Tw_rcnt",        "p20_Tw_futr") ~         "baseline",
+      scenario %in% c("p20_Tw_rcntdam",     "p20_Tw_futrdam") ~      "dam",
+      scenario %in% c("p20_Tw_rcntshade",   "p20_Tw_futrshade") ~    "shade",
+      scenario %in% c("p20_Tw_rcntdamshade","p20_Tw_futrdamshade") ~ "damshade",
+      TRUE ~ NA_character_
+    )
+  ) |>
+  select(-scenario) |>
+  pivot_wider(
+    names_from = "Restoration",
+    values_from = "percent"
+  ) |>
+  mutate(
+    Climate = factor(Climate, levels = c("Recent", "Future"))
+  ) |>
+  mutate(
+    Baseline_lo = baseline,
+    Baseline_hi = baseline,
+    Dam_lo      = dam,
+    Dam_hi      = dam,
+    Shade_lo    = shade,
+    Shade_hi    = shade,
+    DamShade_lo = damshade,
+    DamShade_hi = damshade,
+    label = case_when(
+      Climate == "Recent" ~ label_band,
+      Climate == "Future" ~ label_band_deets,
+      TRUE ~ label
+    )
+  ) |> 
+  mutate(band_id = forcats::fct_rev(band_id)) |>
+  arrange(band_id, Climate) |>
+  data.frame()
+
+# str(stat_df_grouped)
+```
+
+
+
+```{r fig.height=8, fig.width=11, warning=FALSE, message=FALSE, results='hide'}
+micromap_bar_grouped <- mmgroupedplot2(
+  stat.data   = stat_df_grouped,
+  map.data    = map_table,
+  panel.types = c('labels','bar_cl','bar_cl','bar_cl','bar_cl','map'),
+  panel.data  = list('label', 
+                     list("baseline", "Baseline_lo", "Baseline_hi"),
+                     list("dam",      "Dam_lo",      "Dam_hi"),
+                     list("shade",    "Shade_lo",    "Shade_hi"),
+                     list("damshade", "DamShade_lo", "DamShade_hi"),
+                     NA
+  ),
+  grp.by      = 'band_id',  # geographic unit groups
+  cat         = 'Climate',  # categorical variable for different bars w/in a group
+  map.link    = c('band_id', 'ID'),
+  map.all     = TRUE,
+  colors = c("white", "grey60"),
+  plot.footer = "Percent of reach length as coldwater habitat (%)",
+  # plot.panel.margins = c(2,0,1,0),
+  plot.grp.spacing = 2,
+  plot.height = 8,
+  plot.width  = 11,
+  footer.grid.unit.y.adj = 0.02, 
+  footer.grid.viewport.height = 0.97,
+  footer.grid.viewport.y = 0.51,
+  panel.att   = list(
+        list(1,
+         header = 'Elevation band\n(Reach count, length)',
+         align = 'center',
+         panel.width = 1.25,
+         text.size = .9),
+        list(2,
+             header = 'Climate scenario\n(empty: recent; filled: future)',
+             graph.border.color = NA,
+             graph.bar.size = boxplot_width, 
+             graph.grid.major = FALSE, graph.grid.minor = FALSE,
+             xaxis.ticks  =  ticks_pct,
+             xaxis.labels =  ticks_pct
+        ),
+        list(3,
+             header = '+ Dam removal',
+             graph.border.color = NA,
+             graph.bar.size = boxplot_width, 
+             graph.grid.major = FALSE, graph.grid.minor = FALSE,
+             xaxis.ticks  =  c(0, 25, 50, 75, 100),
+             xaxis.labels =  c(0, 25, 50, 75, 100)
+        ),
+        list(4,
+             header = '+ Shade restoration',
+             graph.border.color = NA,
+             graph.bar.size = boxplot_width, 
+             graph.grid.major = FALSE, graph.grid.minor = FALSE,
+             xaxis.ticks  =  c(0, 25, 50, 75, 100),
+             xaxis.labels =  c(0, 25, 50, 75, 100)
+        ),
+        list(5,
+             header = '+ Dam + shade',
+             graph.border.color = NA,
+             graph.bar.size = boxplot_width, 
+             graph.grid.major = FALSE, graph.grid.minor = FALSE,
+             xaxis.ticks  =  c(0, 25, 50, 75, 100),
+             xaxis.labels =  c(0, 25, 50, 75, 100)
+        ),
+        list(6,
+             header = 'MA river networks\n(active band highlighted)',
+             inactive.fill = 'lightgray',
+             inactive.border.color = gray(.7),
+         panel.width = 1.25)
+  )
+)
+```
+
+
+```{r warning=FALSE, message=FALSE, results='hide'}
+print.mm2(micromap_bar_grouped,  res = 1200, footer.grid.unit.y.adj = 0.02, 
+                      footer.grid.viewport.height = 0.97,
+                      footer.grid.viewport.y = 0.51,
+          name = "../figures/Figure4_barplot_CWH_micromap.png")
+print.mm2(micromap_bar_grouped,  res = 1200, footer.grid.unit.y.adj = 0.0185, 
+                      footer.grid.viewport.height = 0.97,
+                      footer.grid.viewport.y = 0.51,
+          name = "../figures/Figure4_barplot_CWH_micromap.pdf")
+```
+
+```{r}
+grDevices::cairo_ps(
+  filename = "../figures/Figure4_barplot_CWH_micromap.eps",
+  width = 11,
+  height = 8,
+  onefile = FALSE,
+  family = "sans"
+)
+
+micromap_bar_grouped
+
+dev.off()
+```
+
+<br>  
+
+
+# Cold-water habitat by elevation  
+
+## Table 3. State-wide statistics  
+
+What is the mean elevation of the cold-water habitat across the state?  
+
+```{r}
+# function to generate the state-wide statistics
+# requires the augment_df (output from SSN2::augment() function) and a character
+# string to name the scenario from with the augment output comes from
+cold_water_hab_state_stats_fnx <- 
+  function(augment_df, scenario_name) {
+    augment_df |>
+      mutate(Tmean_C = mean(.fitted, na.rm = TRUE),
+             Tsd_C = sd(.fitted, na.rm = TRUE)) |>
+      filter(.fitted <= 20) |> 
+      select(v2elevm, Shape_Leng, .fitted, Tmean_C, Tsd_C) |> 
+      reframe(clim_cond = scenario_name,
+              n_sites = n(),
+              mean_elevm = round(mean(v2elevm, na.rm = TRUE),2),
+              median_elevm = round(median(v2elevm, na.rm = TRUE,),2),
+              reach_km = round(sum(Shape_Leng)/1000,2),
+              CWHTmean_C = round(mean(.fitted, na.rm = TRUE),2),
+              CWHTsd_C = round(sd(.fitted, na.rm = TRUE),2),
+              MATmean_C = round(mean(Tmean_C, na.rm = TRUE),2),
+              MATsd_C = round(mean(Tsd_C, na.rm = TRUE),2)
+      )
+  }
+```
+
+
+```{r}
+temp_thshld20c_MA_summary_df <-
+  bind_rows(cold_water_hab_state_stats_fnx(augm_rcnt,
+                                           "Recent climate (1990-2022)"),
+            cold_water_hab_state_stats_fnx(augm_rcntdam,
+                                           "Recent climate + dam removal (-1 dam/10km\u00b2)"),
+            cold_water_hab_state_stats_fnx(augm_rcntshade,
+                                           "Recent climate + riparian shade restoration (+10% shade)"),
+            cold_water_hab_state_stats_fnx(augm_rcntdamshade,
+                                           "Recent climate + dam removal + shade restoration"),
+            cold_water_hab_state_stats_fnx(augm_futr,
+                                           "Future climate (+2\u00B0C air temp.)"),
+            cold_water_hab_state_stats_fnx(augm_futrdam,
+                                           "Future climate + dam removal"),
+            cold_water_hab_state_stats_fnx(augm_futrshade,
+                                           "Future climate + shade restoration"),
+            cold_water_hab_state_stats_fnx(augm_futrdamshade,
+                                           "Future climate + dam removal + shade restoration")
+  ) |>
+  rename("Scenario conditions"="clim_cond",
+         "Reach count"="n_sites",
+         "Mean elev. (m)"="mean_elevm",
+         "Median elev. (m)"="median_elevm",
+         "Reach length (km)"="reach_km")
+
+write_csv(temp_thshld20c_MA_summary_df,
+          file = "../tables/table3_coldwaterhabt_count_length_elev_stats.csv")
+
+# use knitr table for PDF output
+# knitr::kable(temp_thshld20c_MA_summary_df)
+
+# use DT table for HTML output
+DT::datatable(temp_thshld20c_MA_summary_df, rownames = FALSE,
+              caption = paste0("State-wide statistics on reach count, length, ",
+                               "and elevation for cold water habitat for each scenario."))
+```
+
+
+
+## Fig 3. Density distributions of cold water habitat  
+
+The ridgeline plot compares density distributions of the MA reaches that meet the 20C threshold among scenarios as well as with the density distribution of reaches for all networks in MA. The mean reach length (km) among the MA networks is: `r round(mean(filter(augm_rcnt,!is.na(.fitted))$Shape_Leng)/1000,3)` km with a median of: `r round(median(filter(augm_rcnt,!is.na(.fitted))$Shape_Leng)/1000,3)`. So, there is roughly a 1km reach length across the modeling networks used in this analysis.
+
+```{r message=FALSE, warning=FALSE, fig.width=6.5, fig.height=5}
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#  Density ridgeline plots for 20C reaches by elevation gradient(ggplot)   
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+augm_binder_df <- mutate(augm_rcnt,     Scenario = "rcnt") %>%
+  bind_rows(.,mutate(augm_rcntdam,      Scenario = "rcntdam")) %>%
+  bind_rows(.,mutate(augm_rcntshade,    Scenario = "rcntshade")) %>%
+  bind_rows(.,mutate(augm_rcntdamshade, Scenario = "rcntdamshade")) %>%
+  bind_rows(.,mutate(augm_futr,         Scenario = "futr")) %>%
+  bind_rows(.,mutate(augm_futrdam,      Scenario = "futrdam")) %>%
+  bind_rows(.,mutate(augm_futrshade,    Scenario = "futrshade")) %>%
+  bind_rows(.,mutate(augm_futrdamshade, Scenario = "futrdamshade")) %>%
+  select(Scenario, ssnid, pid, COMID, upDist, 
+         AreaKm2, dJLtavg, BFIc, CPY100x, v2elevm, NIDDENw, 
+         Tw_pred = .fitted) |>
+  mutate(Scenario = factor(Scenario, 
+                           levels = c("rcnt",
+                                      "rcntdam",
+                                      "rcntshade",
+                                      "rcntdamshade",
+                                      "futr",
+                                      "futrdam",
+                                      "futrshade",
+                                      "futrdamshade"
+                                      ),
+                           labels = c("Recent climate\n(1990\u20132022 average)\n\n\n\n",
+                                      "Recent climate +\ndam removal\n(\u22121 dam/10 km\u00b2)\n\n\n\n",
+                                      "Recent climate +\nriparian shade restoration\n(+10% shade)\n\n\n\n",
+                                      "Recent climate +\ndam removal +\nshade restoration\n\n\n\n",
+                                      "Future climate\n(+2\u00B0C air temperature)\n\n\n\n",
+                                      "Future climate +\ndam removal\n\n\n\n",
+                                      "Future climate +\nshade restoration\n\n\n\n",
+                                      "Future climate +\ndam removal +\nshade restoration\n\n\n\n")))
+hline_tick_df <- expand_grid(
+  x = seq(100, 700, 100),
+  y = 2:8
+) %>%
+  mutate(
+    xend = x,
+    yend = y,
+    y = y - 0.06
+  )
+```
+
+```{r fig.height=5, fig.width = 6.5, message=FALSE, warning=FALSE}
+scenario_20C_reaches_by_elevation_ridgesplot <-
+  ggplot(data = filter(augm_binder_df, Tw_pred <= 20)) +
+  geom_density_ridges(data = augm_binder_df,
+                      aes(x = v2elevm, y = Scenario), 
+                      scale = .95, alpha = 0.5, 
+                      rel_min_height = 0.005,
+                      color = "#7570b3", fill = NA, linetype = "dashed") +
+  geom_density_ridges2(aes(x = v2elevm, y = Scenario), 
+                       scale = .95, alpha = 0.5, 
+                       rel_min_height = 0.005,
+                       color = "#d95f02", fill = "#d95f02") + 
+  geom_hline(yintercept = 2:8, color = "black", linewidth = 0.5) +
+  geom_segment(
+    data = hline_tick_df,
+    aes(x = x, xend = xend, y = y, yend = yend),
+    inherit.aes = FALSE,
+    color = "black",
+    linewidth = 0.4
+  ) +
+  theme_classic() +
+  theme(plot.caption = element_text(hjust = 1),
+        axis.ticks.y = element_blank()) +  # remove y-axis ticks
+  
+  scale_y_discrete(limits = rev,  # reverse order of scenarios
+                   expand = expansion(mult = c(0, 0.05)) # shrink space btwn xaxis and 1st ridgeline
+                   ) +  
+  scale_x_continuous(breaks = seq(0, 700, 100), limits = c(0,725)) +
+  coord_cartesian(xlim = c(0,725)) +
+  labs(x = "Elevation (m)",
+       # title = "Density ridgelines for reaches \u2264 20\u00B0C",
+       # caption = paste0("Dashed ridgeline represents density distribution of ",
+       #                  "all reaches across MA"), 
+       y = "Density distributions of stream reaches by scenario")
+scenario_20C_reaches_by_elevation_ridgesplot
+```
+
+
+
+```{r message=FALSE, warning=FALSE}
+ggsave(plot = scenario_20C_reaches_by_elevation_ridgesplot,
+       filename = "../figures/Figure3_coldwaterhabitat_ridgelineplot.png",
+       width = 6.5,height = 5, dpi = 600, units = "in")
+
+ggsave(plot = scenario_20C_reaches_by_elevation_ridgesplot,
+       filename = "../figures/Figure3_coldwaterhabitat_ridgelineplot.eps",
+       device = cairo_ps,
+       width = 6.5,height = 5, dpi = 600, units = "in")
+```
+
+
+
+
+##  Fig 5A. Recent climate cold water habitat availability 
+
+```{r fig.width = 6.5, fig.height=4, warning=FALSE}
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# BASELINE Recent climate                                        ####
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# calculate proportions for site number and reach length by elevation band
+elev_band_00rcnt <- augm_rcnt |> st_drop_geometry() |>
+  group_by(elev_band = cut(v2elevm, breaks= seq(0, 750, elev_band_width_m)) ) |> 
+  mutate(n_sites_tot = n(),
+         reach_km_tot = sum(Shape_Leng)/1000) |> ungroup() |>
+  filter(.fitted <= 20) |>
+  group_by(elev_band = cut(v2elevm, breaks= seq(0, 750, elev_band_width_m)) ) |> 
+  reframe(clim_cond = "Recent",
+          n_sites = n(),
+          reach_km = sum(Shape_Leng)/1000,
+          n_sites_tot = max(n_sites_tot),
+          reach_km_tot = max(reach_km_tot)) |>
+  right_join(elev_threshold_df, by = c("elev_band") ) |>
+  mutate(siteprop_n_tot = (n_sites/n_sites_tot),
+         siteprop_km_tot = (reach_km/reach_km_tot)) 
+
+# make plotting data frame for overall cold-water habitat for recent climate
+site_prop_rcnt_df <- elev_band_00rcnt |>
+  pivot_longer(cols = c("siteprop_n_tot","siteprop_km_tot"), 
+               names_to = "prop_type", values_to = "proportion") |>
+  filter(!is.na(n_sites_tot))
+```
+
+
+```{r message=FALSE, warning=FALSE}
+(siteprop_rcnt_plot_kmonly <-
+   ggplot(data = filter(site_prop_rcnt_df, prop_type == "siteprop_km_tot"), 
+          aes(x = elev_band_mid, y = proportion) ) +
+   # geom_hline(yintercept = 0, linetype = "dashed", color = "grey50") +
+   # geom_hline(yintercept = 1, linetype = "dashed", color = "grey50") +
+   
+   geom_smooth(color = "grey50", se = FALSE, 
+               
+               method = 'loess', formula = "y ~ x + 0", span = 0.9,
+               # method = 'lm', formula = y ~ 0 + x + I(x^2),
+               # method = "nls", 
+               # formula = y ~ 1 * (1 - ((x - xp) / xp)^2), 
+               # method.args = list(start = list(xp = 700)), # 'xp' is your guess for the peak's x-location
+               
+               linewidth = 1) +
+   
+   geom_point(color = "black", shape = 16, size = 2) +
+   
+   theme_classic() +
+   scale_x_continuous(breaks = seq(0, 700, 100)) +
+   coord_cartesian(xlim = c(0,725)) +
+   scale_y_continuous(limits = c(0,1)) + 
+   theme(plot.margin = margin(t = 30, r = 5, b = 5, l = 5)) + 
+   labs(x = "",
+        # x = "Reach elevation (m)", 
+        # title = "Recent climate habitat meeting 20\u00B0C threshold across all MA reaches",
+        y = "Proportion of coldwater reach length"
+        ) 
+ )
+```
+
+
+
+## Fig 5B. Reach length comparison among all scenarios  
+
+```{r warning = FALSE, fig.height=4.5, fig.width=6.5}
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# SFS building Combo plot for all scenarios' proportion of sites gains/lost ####
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+siteprop_comboclimrest_df <- 
+  bind_rows(elev_band_proportion_fnx(augm_rcntdam,      "rcntdam"),
+            elev_band_proportion_fnx(augm_rcntshade,    "rcntshade"),
+            elev_band_proportion_fnx(augm_rcntdamshade, "rcntdamshade"),
+            elev_band_proportion_fnx(augm_futr,         "futr"),
+            elev_band_proportion_fnx(augm_futrdam,      "futrdam"),
+            elev_band_proportion_fnx(augm_futrshade,    "futrshade"),
+            elev_band_proportion_fnx(augm_futrdamshade, "futrdamshade")) |>
+  mutate(Scenario = factor(clim_cond, 
+                           levels = c("futr","futrdam","futrshade", "futrdamshade",
+                                      "rcntdam","rcntshade","rcntdamshade")))
+
+labels_for_figs <- c(futr =          "Future",
+                     futrdam =       "Future + dam",
+                     futrshade =     "Future + shade",
+                     futrdamshade =  "Future + dam + shade",
+                     rcntdam =       "Recent + dam", 
+                     rcntshade =     "Recent + shade", 
+                     rcntdamshade =  "Recent + dam + shade")
+
+(siteprop_comboclimrest_plot <- 
+    ggplot() + geom_hline(yintercept = 0, color = "grey50", linewidth = 0.75) +
+    
+    geom_smooth(data = filter(siteprop_comboclimrest_df, 
+                              Scenario %in% c("rcntdam","rcntshade","rcntdamshade",
+                                              "futr",
+                                              "futrdam","futrshade","futrdamshade")),
+                se = FALSE, level = 0.95, method = "loess", formula = 'y~x',
+                aes(x = elev_band_mid, 
+                    color = Scenario, 
+                    fill = Scenario,
+                    linetype = Scenario,
+                    linewidth = Scenario,
+                    y = siteprop_n) ) +
+    
+    theme_classic() +
+    scale_linetype_manual(name = "Scenario", 
+                          values = c("dashed","dotdash","dotdash","solid",
+                                     "dotted","dotted","dotted"),
+                          labels = labels_for_figs) +
+    scale_linewidth_manual(name = "Scenario", 
+                           values = c(1,1,1,1.5,1,1,1),
+                           labels = labels_for_figs) +
+    scale_color_manual(name = "Scenario", 
+                       values = c('#b35806','#f1a340','#fee0b6','black',
+                                  '#d8daeb','#998ec3','#542788'),
+                       labels = labels_for_figs) +
+    scale_fill_manual(name = "Scenario", 
+                      values = c('#b35806','#f1a340','#fee0b6','black',
+                                 '#d8daeb','#998ec3','#542788'),
+                      labels = labels_for_figs) +
+    scale_y_continuous(breaks = seq(-1, 2, 1), 
+                       labels = ~sub("-", "\u2212", .x)) +
+    scale_x_continuous(breaks = seq(0, 700, 100)) +
+    coord_cartesian(ylim = c(-1, 2), xlim = c(0,725)) +
+    theme(legend.position = c(0.6,0.8), 
+          plot.title = element_markdown(),    # used for double line subtitle
+          plot.subtitle = element_markdown(), # used for double line subtitle
+          legend.background = element_blank(),
+          legend.key = element_blank(), 
+          legend.key.width = unit(0.5,"in"),  # increase width of legend keys
+          legend.direction = "horizontal", 
+          legend.text.align = 0) +
+    guides(color = guide_legend(nrow = 4), 
+           fill = guide_legend(nrow = 4),
+           linetype = guide_legend(nrow = 4),
+           linewidth = guide_legend(nrow = 4)) +
+    labs(x = "Reach elevation (m)",
+         # title = paste0("Proportion of reach length meeting 20\u00B0C threshold ",
+         #                "(Recent as baseline)"),
+         # subtitle = paste0('Scenarios: Warming (+2\u00B0C air temp.); Dam (\u22121 ',
+         #                   'dam per 10km\u00b2); Shade (+10% shade)'),
+         y = "Proportion of coldwater habitat\n(reach length gained [+] or lost [-])"
+         ) 
+)
+```
+
+
+## Figure 5 Panel Plot  
+
+
+```{r fig.width = 6.5, fig.height=7.5, warning=FALSE}
+figure_5_panel_plot <-
+  cowplot::plot_grid(siteprop_rcnt_plot_kmonly, siteprop_comboclimrest_plot,
+                   labels = c("A","B"),
+                   label_x = 0.01,
+                   label_y = c(0.95, 1.01),
+                   rel_heights = c(1,1.2),
+                   align = "v",
+                   hjust = 0,
+                   vjust = 0,
+                   nrow = 2) + 
+  theme(plot.background = element_rect(fill = "white",color = NA))
+figure_5_panel_plot
+```
+
+
+```{r}
+ggsave(plot = figure_6_panel_plot,
+       filename = paste0("../figures/",
+                         "Figure5_coldwaterhabitat_proportions.png"),
+       width = 6.5, height = 7.5, units = "in", dpi = 600)
+
+ggsave(plot = figure_6_panel_plot,
+       filename = paste0("../figures/",
+                         "Figure5_coldwaterhabitat_proportions.eps"),
+       device = cairo_ps,
+       width = 6.5, height = 7.5, units = "in", dpi = 600)
+```
+
+
+# Supporting Information  
+
+
+
+##  Fig S1. CWH by elevation threshhold comparison  
+
+
+```{r}
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# BASELINE Recent climate                                        ####
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# calculate proportions for site number and reach length by elevation band
+elev_band_00rcnt18 <- augm_rcnt |> st_drop_geometry() |>
+  group_by(elev_band = cut(v2elevm, breaks= seq(0, 750, elev_band_width_m)) ) |> 
+  mutate(n_sites_tot = n(),
+         reach_km_tot = sum(Shape_Leng)/1000) |> ungroup() |>
+  filter(.fitted <= 18) |>
+  group_by(elev_band = cut(v2elevm, breaks= seq(0, 750, elev_band_width_m)) ) |> 
+  reframe(clim_cond = "Recent",
+          n_sites = n(),
+          reach_km = sum(Shape_Leng)/1000,
+          n_sites_tot = max(n_sites_tot),
+          reach_km_tot = max(reach_km_tot)) |>
+  right_join(elev_threshold_df, by = c("elev_band") ) |>
+  mutate(siteprop_n_tot = (n_sites/n_sites_tot),
+         siteprop_km_tot = (reach_km/reach_km_tot)) 
+
+# make plotting data frame for overall cold-water habitat for recent climate
+site_prop_rcnt18_df <- elev_band_00rcnt18 |>
+  pivot_longer(cols = c("siteprop_n_tot","siteprop_km_tot"), 
+               names_to = "prop_type", values_to = "proportion") |>
+  filter(!is.na(n_sites_tot))
+
+
+
+# calculate proportions for site number and reach length by elevation band
+elev_band_00rcnt19 <- augm_rcnt |> st_drop_geometry() |>
+  group_by(elev_band = cut(v2elevm, breaks= seq(0, 750, elev_band_width_m)) ) |> 
+  mutate(n_sites_tot = n(),
+         reach_km_tot = sum(Shape_Leng)/1000) |> ungroup() |>
+  filter(.fitted <= 19) |>
+  group_by(elev_band = cut(v2elevm, breaks= seq(0, 750, elev_band_width_m)) ) |> 
+  reframe(clim_cond = "Recent",
+          n_sites = n(),
+          reach_km = sum(Shape_Leng)/1000,
+          n_sites_tot = max(n_sites_tot),
+          reach_km_tot = max(reach_km_tot)) |>
+  right_join(elev_threshold_df, by = c("elev_band") ) |>
+  mutate(siteprop_n_tot = (n_sites/n_sites_tot),
+         siteprop_km_tot = (reach_km/reach_km_tot)) 
+
+# make plotting data frame for overall cold-water habitat for recent climate
+site_prop_rcnt19_df <- elev_band_00rcnt19 |>
+  pivot_longer(cols = c("siteprop_n_tot","siteprop_km_tot"), 
+               names_to = "prop_type", values_to = "proportion") |>
+  filter(!is.na(n_sites_tot))
+
+
+
+# calculate proportions for site number and reach length by elevation band
+elev_band_00rcnt20 <- augm_rcnt |> st_drop_geometry() |>
+  group_by(elev_band = cut(v2elevm, breaks= seq(0, 750, elev_band_width_m)) ) |> 
+  mutate(n_sites_tot = n(),
+         reach_km_tot = sum(Shape_Leng)/1000) |> ungroup() |>
+  filter(.fitted <= 20) |>
+  group_by(elev_band = cut(v2elevm, breaks= seq(0, 750, elev_band_width_m)) ) |> 
+  reframe(clim_cond = "Recent",
+          n_sites = n(),
+          reach_km = sum(Shape_Leng)/1000,
+          n_sites_tot = max(n_sites_tot),
+          reach_km_tot = max(reach_km_tot)) |>
+  right_join(elev_threshold_df, by = c("elev_band") ) |>
+  mutate(siteprop_n_tot = (n_sites/n_sites_tot),
+         siteprop_km_tot = (reach_km/reach_km_tot)) 
+
+# make plotting data frame for overall cold-water habitat for recent climate
+site_prop_rcnt20_df <- elev_band_00rcnt20 |>
+  pivot_longer(cols = c("siteprop_n_tot","siteprop_km_tot"), 
+               names_to = "prop_type", values_to = "proportion") |>
+  filter(!is.na(n_sites_tot))
+
+
+
+site_prop_rcnt181920_df <- bind_rows(
+  mutate(site_prop_rcnt18_df, t_thresh = factor("18", levels = c("18","19","20"))),
+  mutate(site_prop_rcnt19_df, t_thresh = factor("19", levels = c("18","19","20"))),
+  mutate(site_prop_rcnt20_df, t_thresh = factor("20", levels = c("18","19","20")))
+)
+```
+
+
+
+```{r warning = FALSE, message = FALSE}
+(siteprop_rcnt_plot_temp_threshold <-
+   ggplot(data = filter(site_prop_rcnt181920_df, prop_type == "siteprop_km_tot"), 
+          aes(x = elev_band_mid, y = proportion, 
+              color = t_thresh, shape = t_thresh, linetype = t_thresh) ) +
+   geom_hline(yintercept = 0, linetype = "dashed", color = "grey50") +
+   geom_hline(yintercept = 1, linetype = "dashed", color = "grey50") +
+   
+   geom_smooth(se = FALSE, linewidth = 1.5,
+               method = 'loess', formula = "y ~ x + 0", span = 0.9,
+               fullrange = FALSE) +
+   
+   geom_point(size = 2) +
+   
+   theme_classic() +
+   scale_y_continuous(limits = c(0,1)) + 
+   scale_color_manual(breaks = c("18","19","20"),
+                      values = c("#0072B2","#E69F00","black") ) +
+   scale_linetype_manual(breaks = c("18","19","20"),
+                      values = c("dashed","dotdash","solid") ) +
+   scale_shape_manual(breaks = c("18","19","20"),
+                      values = c(2,6,1) ) +
+   scale_x_continuous(breaks = seq(0, 700, 100)) +
+   theme(legend.position = "bottom") +
+   labs(x = "Reach elevation (m)", 
+        title = "Recent climate: MA reaches meeting 18, 19, or 20\u00B0C threshold",
+        color = "Temperature threshold (\u00B0C)",
+        linetype = "Temperature threshold (\u00B0C)",
+        shape = "Temperature threshold (\u00B0C)",
+        y = "Proportion of reach length") )
+
+ggsave(plot = siteprop_rcnt_plot_temp_threshold, width = 6.5, height = 4, units = "in", dpi = 600,
+       filename = "../figures/FigureS1_coldwaterhabitat_available_in_recent_climate_thresholdcomparison.png")
+
+# ggsave(plot = siteprop_rcnt_plot_temp_threshold, width = 6.5, height = 4, units = "in", dpi = 600,
+#        device = cairo_ps,
+#        filename = "../figures/FigureS1_coldwaterhabitat_available_in_recent_climate_thresholdcomparison.eps")
+```
+
+
+## Fig S2. Density distributions of cold water habitat  
+
+The ridgeline plot compares density distributions of the MA reaches that meet the 20C threshold among scenarios as well as with the density distribution of reaches for all networks in MA. The mean reach length (km) among the MA networks is: `r round(mean(filter(augm_rcnt,!is.na(.fitted))$Shape_Leng)/1000,3)` km with a median of: `r round(median(filter(augm_rcnt,!is.na(.fitted))$Shape_Leng)/1000,3)`. So, there is roughly a 1km reach length across the modeling networks used in this analysis.
+
+
+```{r message=FALSE, warning=FALSE, fig.width=6.5, fig.height=5}
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#  Density ridgeline plots for 18C reaches by elevation gradient(ggplot)   
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+scenario_18C_reaches_by_elevation_ridgesplot <-
+  ggplot(data = filter(augm_binder_df, Tw_pred <= 18)) +
+  geom_density_ridges(data = augm_binder_df,
+                      aes(x = v2elevm, y = Scenario), 
+                      scale = .95, alpha = 0.5, 
+                      color = "#7570b3", fill = NA, linetype = "dashed") +
+  geom_density_ridges2(aes(x = v2elevm, y = Scenario), 
+                       scale = .95, alpha = 0.5, 
+                       color = "#d95f02", fill = "#d95f02") + 
+  geom_hline(yintercept = 2:8, color = "black", linewidth = 0.5) +
+  geom_segment(
+    data = hline_tick_df,
+    aes(x = x, xend = xend, y = y, yend = yend),
+    inherit.aes = FALSE,
+    color = "black",
+    linewidth = 0.4
+  ) +
+  theme_classic() +
+  theme(plot.caption = element_text(hjust = 1),
+        axis.ticks.y = element_blank()) +  # remove y-axis ticks
+  scale_x_continuous(limits = c(0, 725), breaks = seq(0, 700, 100)) +
+  scale_y_discrete(limits = rev,    # reverse order of scenarios
+                   expand = expansion(mult = c(0, 0.05)) # shrink space btwn xaxis and 1st ridgeline
+                   ) +
+  labs(x = "Elevation (m)",
+       title = "Reaches \u2264 18\u00B0C",
+       # caption = paste0("Dashed ridgeline represents density distribution of ",
+       #                  "all reaches across MA"), 
+       y = "Density distributions of stream reaches by scenario\n")
+```
+
+
+```{r message=FALSE, warning=FALSE, fig.width=6.5, fig.height=5}
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#  Density ridgeline plots for 19C reaches by elevation gradient(ggplot)   
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+scenario_19C_reaches_by_elevation_ridgesplot <-
+  ggplot(data = filter(augm_binder_df, Tw_pred <= 19)) +
+  geom_density_ridges(data = augm_binder_df,
+                      aes(x = v2elevm, y = Scenario), 
+                      scale = .95, alpha = 0.5, 
+                      color = "#7570b3", fill = NA, linetype = "dashed") +
+  geom_density_ridges2(aes(x = v2elevm, y = Scenario), 
+                       scale = .95, alpha = 0.5, 
+                       color = "#d95f02", fill = "#d95f02") + 
+  geom_hline(yintercept = 2:8, color = "black", linewidth = 0.5) +
+  geom_segment(
+    data = hline_tick_df,
+    aes(x = x, xend = xend, y = y, yend = yend),
+    inherit.aes = FALSE,
+    color = "black",
+    linewidth = 0.4
+  ) +
+  theme_classic() +
+  theme(plot.caption = element_text(hjust = 1),
+        axis.ticks.y = element_blank()) +  # remove y-axis ticks
+  scale_x_continuous(limits = c(0, 725), breaks = seq(0, 700, 100)) +
+  scale_y_discrete(limits = rev,    # reverse order of scenarios
+                   expand = expansion(mult = c(0, 0.05)) # shrink space btwn xaxis and 1st ridgeline
+                   ) +
+  labs(x = "Elevation (m)",
+       title = "Reaches \u2264 19\u00B0C",
+       # caption = paste0("Dashed ridgeline represents density distribution of ",
+       #                  "all reaches across MA"), 
+       y = "Density distributions of stream reaches by scenario\n")
+```
+
+
+
+```{r message=FALSE, warning=FALSE, fig.width=6.5, fig.height=5}
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#  Density ridgeline plots for 20C reaches by elevation gradient(ggplot)   
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+scenario_20C_reaches_by_elevation_ridgesplot <-
+  ggplot(data = filter(augm_binder_df, Tw_pred <= 20)) +
+  geom_density_ridges(data = augm_binder_df,
+                      aes(x = v2elevm, y = Scenario), 
+                      scale = .95, alpha = 0.5, 
+                      color = "#7570b3", fill = NA, linetype = "dashed") +
+  geom_density_ridges2(aes(x = v2elevm, y = Scenario), 
+                       scale = .95, alpha = 0.5, 
+                       color = "#d95f02", fill = "#d95f02") + 
+  geom_hline(yintercept = 2:8, color = "black", linewidth = 0.5) +
+  geom_segment(
+    data = hline_tick_df,
+    aes(x = x, xend = xend, y = y, yend = yend),
+    inherit.aes = FALSE,
+    color = "black",
+    linewidth = 0.4
+  ) +
+  theme_classic() +
+  theme(plot.caption = element_text(hjust = 1),
+        axis.ticks.y = element_blank()) +  # remove y-axis ticks
+  scale_x_continuous(limits = c(0, 725), breaks = seq(0, 700, 100)) +
+  scale_y_discrete(limits = rev,    # reverse order of scenarios
+                   expand = expansion(mult = c(0, 0.05)) # shrink space btwn xaxis and 1st ridgeline
+                   ) +
+  labs(x = "Elevation (m)",
+       title = "Reaches \u2264 20\u00B0C",
+       # caption = paste0("Dashed ridgeline represents density distribution of ",
+       #                  "all reaches across MA"), 
+       y = "Density distributions of stream reaches by scenario\n")
+```
+
+
+```{r fig.width=10, fig.height=7, warning = FALSE, message = FALSE}
+# Build your three plots as above, with identical y factor levels
+# Then remove y-axis elements from middle/right
+scenario_18C_reaches_by_elevation_ridgesplot_clean <- 
+  scenario_18C_reaches_by_elevation_ridgesplot +
+  theme(axis.title.x = element_blank())
+scenario_19C_reaches_by_elevation_ridgesplot_clean <- 
+  scenario_19C_reaches_by_elevation_ridgesplot +
+  theme(axis.text.y = element_blank(),
+        axis.title.y = element_blank(),
+        axis.ticks.y = element_blank())
+scenario_20C_reaches_by_elevation_ridgesplot_clean <- 
+  scenario_20C_reaches_by_elevation_ridgesplot + 
+  theme(axis.title.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.title.y = element_blank(),
+        axis.ticks.y = element_blank())
+
+# Align horizontally and align the left axes
+coldwaterhabitat_ridgelineplot_threshold_sensitivity <- 
+  cowplot::plot_grid(
+    scenario_18C_reaches_by_elevation_ridgesplot_clean, 
+    scenario_19C_reaches_by_elevation_ridgesplot_clean, 
+    scenario_20C_reaches_by_elevation_ridgesplot_clean,
+    ncol = 3,
+    align = "h",
+    axis = "l",        # align left axes
+    rel_widths = c(1.6, 1, 1)  # adjust if needed
+  )
+coldwaterhabitat_ridgelineplot_threshold_sensitivity
+```
+
+```{r}
+ggsave(plot = coldwaterhabitat_ridgelineplot_threshold_sensitivity,
+       filename = "../figures/FigureS2_coldwaterhabitat_ridgelineplot_thresholdsensitivity.png",
+       width = 10, height = 7, dpi = 600, units = "in")
+
+# ggsave(plot = coldwaterhabitat_ridgelineplot_threshold_sensitivity,
+#        filename = "../figures/FigureS2_coldwaterhabitat_ridgelineplot_thresholdsensitivity.eps",
+#        device = cairo_ps,
+#        width = 6.5,height = 5, dpi = 600, units = "in")
+```
+
+
+
+
+
+## Fig S3. Reach length comparison among all scenarios  
+
+
+```{r}
+# Function to calculated proportion of sites/reach length for a scenario that 
+# is gained or lost when compared to the recent climate baseline. Dependent on 
+# two inputs: scenario predictions from augment() scenario character string name
+# There are other required background inputs that are not changed that include:
+# the elevation band df for the recent climate scenario as a baseline 
+# (elev_band_00rcnt) and the "elev_threshold_df" R df that holds the elevation
+# band min/mid/max values and the factored bands column.
+elev_band_proportion_fnx_temp_threshold <- 
+  function(augment_df, scenario_name, temp_threshold) {
+  threshold_chr <- match.arg(as.character(temp_threshold), c("18", "19", "20"))
+  
+  elev_band_df <- augment_df |> 
+    # remove sf geometry 
+    st_drop_geometry() |>  
+    # grab the total reach length and number of reaches for each elevation band
+    # filter to cold reaches
+    filter(.fitted <= temp_threshold) |>
+    # count reaches and sum up the length of stream within each elevation band
+    group_by(elev_band = cut(v2elevm, breaks= seq(0, 750, elev_band_width_m)) ) |> 
+    reframe(clim_cond = scenario_name,  
+            n_sites = n(),
+            reach_km = sum(Shape_Leng)/1000) |>
+    # join the elevation band threshold df to this summary
+    right_join(elev_threshold_df, by = c("elev_band") ) |>
+    # add the baseline prediction data to this scenario's summary data
+    left_join(select(
+      switch(threshold_chr, `18` = elev_band_00rcnt18,
+             `19` = elev_band_00rcnt19,
+             `20` = elev_band_00rcnt20  ), 
+      elev_band_mid, n_sites_rcnt = n_sites, reach_km_rcnt = reach_km,
+      n_sites_tot, reach_km_tot),
+      by = c("elev_band_mid")) |>
+    # calculate the relative stats based on the baseline scenario data
+    mutate(siteprop_n = (n_sites/n_sites_rcnt)-1,
+           siteprop_km = (reach_km/reach_km_rcnt)-1,
+           siteprop_n_tot = (n_sites/n_sites_tot),
+           siteprop_km_tot = (reach_km/reach_km_tot)) 
+  return(elev_band_df)
+}
+```
+
+
+
+```{r}
+labels_for_FigureS <- 
+  c(futr = "Future",
+    futrdam = "Future + dam",
+    futrshade = "Future + shade",
+    futrdamshade =  "Future + dam + shade",
+    rcntdam = "Recent + dam", 
+    rcntshade = "Recent + shade", 
+    rcntdamshade = "Recent + dam + shade")
+labels_for_FigureS_dummy <- 
+  c(futr = "Future",          dumb1 = "",                   dumb2 = "", 
+    futrdam = "Future + dam", futrshade = "Future + shade", futrdamshade = "Future + dam + shade",
+    rcntdam = "Recent + dam", rcntshade = "Recent + shade", rcntdamshade = "Recent + dam + shade")
+
+
+siteprop18_comboclimrest_df <- 
+  bind_rows(elev_band_proportion_fnx_temp_threshold(augm_rcntdam, "rcntdam", 18),
+            elev_band_proportion_fnx_temp_threshold(augm_rcntshade, "rcntshade", 18),
+            elev_band_proportion_fnx_temp_threshold(augm_rcntdamshade, "rcntdamshade", 18),
+            elev_band_proportion_fnx_temp_threshold(augm_futr, "futr", 18),
+            elev_band_proportion_fnx_temp_threshold(augm_futrdam, "futrdam", 18),
+            elev_band_proportion_fnx_temp_threshold(augm_futrshade, "futrshade", 18),
+            elev_band_proportion_fnx_temp_threshold(augm_futrdamshade, "futrdamshade", 18)) |>
+  mutate(Scenario = factor(clim_cond, 
+                           levels = c("futr","futrdam","futrshade",
+                                      "futrdamshade","rcntdam","rcntshade","rcntdamshade")))
+
+siteprop19_comboclimrest_df <- 
+  bind_rows(elev_band_proportion_fnx_temp_threshold(augm_rcntdam, "rcntdam", 19),
+            elev_band_proportion_fnx_temp_threshold(augm_rcntshade, "rcntshade", 19),
+            elev_band_proportion_fnx_temp_threshold(augm_rcntdamshade, "rcntdamshade", 19),
+            elev_band_proportion_fnx_temp_threshold(augm_futr, "futr", 19),
+            elev_band_proportion_fnx_temp_threshold(augm_futrdam, "futrdam", 19),
+            elev_band_proportion_fnx_temp_threshold(augm_futrshade, "futrshade", 19),
+            elev_band_proportion_fnx_temp_threshold(augm_futrdamshade, "futrdamshade", 19)) |>
+  mutate(Scenario = factor(clim_cond, 
+                           levels = c("futr","futrdam","futrshade",
+                                      "futrdamshade","rcntdam","rcntshade","rcntdamshade")))
+
+siteprop20_comboclimrest_df <- 
+  bind_rows(elev_band_proportion_fnx_temp_threshold(augm_rcntdam, "rcntdam", 20),
+            elev_band_proportion_fnx_temp_threshold(augm_rcntshade, "rcntshade", 20),
+            elev_band_proportion_fnx_temp_threshold(augm_rcntdamshade, "rcntdamshade", 20),
+            elev_band_proportion_fnx_temp_threshold(augm_futr, "futr", 20),
+            elev_band_proportion_fnx_temp_threshold(augm_futrdam, "futrdam", 20),
+            elev_band_proportion_fnx_temp_threshold(augm_futrshade, "futrshade", 20),
+            elev_band_proportion_fnx_temp_threshold(augm_futrdamshade, "futrdamshade", 20)) |>
+  
+  mutate(Scenario = factor(clim_cond, 
+                           levels = c("futr","dumb1","dumb2",
+                                      "futrdam","futrshade","futrdamshade",
+                                      "rcntdam","rcntshade","rcntdamshade")))
+```
+
+
+```{r warning = FALSE, fig.height=3.5, fig.width=6.5}
+siteprop18_comboclimrest_plot <- 
+   ggplot(data = filter(siteprop18_comboclimrest_df, 
+                        Scenario %in% c("rcntdam","rcntshade","rcntdamshade",
+                                        "futr",
+                                        "futrdam","futrshade","futrdamshade")),
+          aes(x = elev_band_mid, 
+              color = Scenario, 
+              fill = Scenario,
+              linetype = Scenario,
+              linewidth = Scenario,
+              y = siteprop_n)) + 
+   geom_hline(yintercept = 0, color = "grey50", linewidth = 0.75) +
+   
+   geom_smooth(se = FALSE, level = 0.95, method = "loess", formula = 'y~x') +
+   
+   theme_classic() +
+   scale_linetype_manual(name = "Scenario", 
+                         values = c("dashed",
+                                    "dotdash","dotdash","solid",
+                                    "dotted","dotted","dotted"),
+                         labels = labels_for_FigureS) +
+   scale_linewidth_manual(name = "Scenario", 
+                          values = c(1, 1,1,1.5, 1,1,1),
+                          labels = labels_for_FigureS) +
+   scale_color_manual(name = "Scenario", 
+                      values = c('#b35806','#f1a340','#fee0b6','black',
+                                 '#d8daeb','#998ec3','#542788'),
+                      labels = labels_for_FigureS) +
+   scale_fill_manual(name = "Scenario", 
+                     values = c('#b35806','#f1a340','#fee0b6','black',
+                                '#d8daeb','#998ec3','#542788'),
+                     labels = labels_for_FigureS) +
+   scale_x_continuous(breaks = seq(0, 700, 100)) +
+   coord_cartesian(ylim = c(-1, 10), xlim = c(0,725)) +
+   ggbreak::scale_y_break(c(2, 2.5), scales = c(0.2,0.8) ) +
+   theme(plot.title = element_markdown(),    # used for double line subtitle
+         axis.title.x = element_blank(),
+         legend.position = "none", 
+         #legend.position = c(0.65,0.75), 
+         plot.margin = margin(5.5, 5.5, 5.5, 5.5),
+         legend.background = element_blank(),
+         legend.key = element_blank(), 
+         legend.key.width = unit(0.5,"in"),  # increase width of legend keys
+         legend.direction = "horizontal", 
+         legend.text.align = 0,
+         plot.subtitle = element_markdown() # used for double line subtitle
+   ) +
+   guides(color = guide_legend(nrow = 4), 
+          fill = guide_legend(nrow = 4),
+          linetype = guide_legend(nrow = 4),
+          linewidth = guide_legend(nrow = 4)
+   ) +
+   labs(x = "Reach elevation (m)",
+        title = "18\u00B0C threshold",
+        # subtitle = paste0('Scenarios: Warming (+2\u00B0C air temp.); Dam (-1 ',
+        #                   'dam per 10km\u00b2); Shade (+10% shade)'),
+        y = "Proportion of coldwater habitat\n(reach length gained [+] or lost [-])") 
+# siteprop18_comboclimrest_plot
+
+# ggsave(plot = siteprop18_comboclimrest_plot,
+#        filename = paste0("../figures/",
+#                          "FigureS3A_coldwaterhabitat_propreachkm_allscenariocurves_18C.png"),
+#        width = 6.5, height = 3.5, units = "in", dpi = 600)
+```
+
+
+```{r warning = FALSE, fig.height=3.5, fig.width=6.5}
+siteprop19_comboclimrest_plot <- 
+   ggplot(data = filter(siteprop19_comboclimrest_df, 
+                        Scenario %in% c("rcntdam","rcntshade","rcntdamshade",
+                                        "futr",
+                                        "futrdam","futrshade","futrdamshade")),
+          aes(x = elev_band_mid, 
+              color = Scenario, 
+              fill = Scenario,
+              linetype = Scenario,
+              linewidth = Scenario,
+              y = siteprop_n)) + 
+   geom_hline(yintercept = 0, color = "grey50", linewidth = 0.75) +
+   
+   geom_smooth(se = FALSE, level = 0.95, method = "loess", formula = 'y~x') +
+   
+   theme_classic() +
+   scale_linetype_manual(name = "Scenario", 
+                         values = c("dashed","dotdash","dotdash","solid",
+                                    "dotted","dotted","dotted"),
+                         labels = labels_for_FigureS) +
+   scale_linewidth_manual(name = "Scenario", 
+                          values = c(1,1,1,1.5,1,1,1),
+                          labels = labels_for_FigureS) +
+   scale_color_manual(name = "Scenario", 
+                      values = c('#b35806','#f1a340','#fee0b6','black',
+                                 '#d8daeb','#998ec3','#542788'),
+                      labels = labels_for_FigureS) +
+   scale_fill_manual(name = "Scenario", 
+                     values = c('#b35806','#f1a340','#fee0b6','black',
+                                '#d8daeb','#998ec3','#542788'),
+                     labels = labels_for_FigureS) +
+   scale_x_continuous(breaks = seq(0, 700, 100)) +
+   coord_cartesian(ylim = c(-1, 13), xlim = c(0,725)) +
+   ggbreak::scale_y_break(c(2, 2.5), scales = c(0.2,0.8) ) +
+   theme(plot.title = element_markdown(),    # used for double line subtitle
+         axis.title.x = element_blank(),
+         legend.position = "none", 
+         #legend.position = c(0.65,0.75), 
+         plot.margin = margin(5.5, 5.5, 5.5, 5.5),
+         legend.background = element_blank(),
+         legend.key = element_blank(), 
+         legend.key.width = unit(0.5,"in"),  # increase width of legend keys
+         legend.direction = "horizontal", 
+         legend.text.align = 0,
+         plot.subtitle = element_markdown() # used for double line subtitle
+   ) +
+   guides(color = guide_legend(nrow = 4), 
+          fill = guide_legend(nrow = 4),
+          linetype = guide_legend(nrow = 4),
+          linewidth = guide_legend(nrow = 4)
+   ) +
+   labs(x = "Reach elevation (m)",
+        title = "19\u00B0C threshold",
+        # subtitle = paste0('Scenarios: Warming (+2\u00B0C air temp.); Dam (-1 ',
+        #                   'dam per 10km\u00b2); Shade (+10% shade)'),
+        y = "Proportion of coldwater habitat\n(reach length gained [+] or lost [-])") 
+# siteprop19_comboclimrest_plot
+
+# ggsave(plot = siteprop19_comboclimrest_plot,
+#        filename = paste0("../figures/",
+#                          "FigureS3B_coldwaterhabitat_propreachkm_allscenariocurves_19C.png"),
+#        width = 6.5, height = 3.5, units = "in", dpi = 600)
+```
+
+
+
+
+```{r warning = FALSE, fig.height=5, fig.width=6.5}
+siteprop20_comboclimrest_plot <- 
+  ggplot(data = filter(siteprop20_comboclimrest_df, 
+                       Scenario %in% c("rcntdam","rcntshade","rcntdamshade",
+                                       "futr",
+                                       "futrdam","futrshade","futrdamshade")),
+         aes(x = elev_band_mid, 
+             color = Scenario, 
+             fill = Scenario,
+             linetype = Scenario,
+             linewidth = Scenario,
+             y = siteprop_n)) + 
+  geom_hline(yintercept = 0, color = "grey50", linewidth = 0.75) +
+  
+  geom_smooth(se = FALSE, level = 0.95, method = "loess", formula = 'y~x') +
+  
+  theme_classic() +
+  scale_linetype_manual(name = "Scenario",
+                        breaks = c("futr","dumb1","dumb2",
+                                   "futrdam","futrshade","futrdamshade",
+                                   "rcntdam","rcntshade","rcntdamshade"),
+                        values = c("dashed",0,0,
+                                   "dotdash","dotdash","solid",
+                                   "dotted","dotted","dotted"),
+                        labels = labels_for_FigureS_dummy, drop = FALSE, na.translate = FALSE) +
+  scale_linewidth_manual(name = "Scenario", 
+                         breaks = c("futr","dumb1","dumb2",
+                                    "futrdam","futrshade","futrdamshade",
+                                    "rcntdam","rcntshade","rcntdamshade"),
+                         values = c(1,0,0, 1,1,1.5, 1,1,1),
+                         labels = labels_for_FigureS_dummy, drop = FALSE, na.translate = FALSE) +
+  scale_color_manual(name = "Scenario", 
+                     breaks = c("futr","dumb1","dumb2",
+                                "futrdam","futrshade","futrdamshade",
+                                "rcntdam","rcntshade","rcntdamshade"),
+                     values = c('#b35806',NA,NA,
+                                '#f1a340','#fee0b6','black',
+                                '#d8daeb','#998ec3','#542788'),
+                     labels = labels_for_FigureS_dummy, drop = FALSE, na.translate = FALSE) +
+  scale_fill_manual(name = "Scenario", 
+                    breaks = c("futr","dumb1","dumb2",
+                               "futrdam","futrshade","futrdamshade",
+                               "rcntdam","rcntshade","rcntdamshade"),
+                    values = c('#b35806',NA,NA,
+                               '#f1a340','#fee0b6','black',
+                               '#d8daeb','#998ec3','#542788'),
+                    labels = labels_for_FigureS_dummy, drop = FALSE, na.translate = FALSE) +
+  scale_y_continuous(breaks = seq(-1, 2, 1), 
+                     labels = ~sub("-", "\u2212", .x)) +
+  scale_x_continuous(breaks = seq(0, 700, 100)) +
+  coord_cartesian(ylim = c(-1, 2), xlim = c(0,725)) +
+  theme(legend.position = "bottom", 
+        plot.title = element_markdown(),    # used for double line subtitle
+        plot.subtitle = element_markdown(), # used for double line subtitle
+        plot.margin = margin(5.5, 5.5, 5.5, 5.5),
+        legend.background = element_blank(),
+        legend.key = element_blank(), 
+        legend.key.width = unit(0.5,"in"),  # increase width of legend keys
+        legend.direction = "horizontal", 
+        legend.text.align = 0) +
+  guides(color = guide_legend(ncol = 3, byrow = TRUE), 
+         fill = guide_legend(ncol = 3, byrow = TRUE),
+         linetype = guide_legend(ncol = 3, byrow = TRUE),
+         linewidth = guide_legend(ncol = 3, byrow = TRUE)) +
+  labs(x = "Reach elevation (m)",
+       title = "20\u00B0C threshold",
+       # caption = paste0('Scenarios: Warming (+2\u00B0C air temp.); Dam (-1 ',
+       #                  'dam per 10km\u00b2); Shade (+10% shade)'),
+       y = "Proportion of coldwater habitat\n(reach length gained [+] or lost [-])") 
+# siteprop20_comboclimrest_plot
+
+# ggsave(plot = siteprop20_comboclimrest_plot,
+#        filename = paste0("../figures/",
+#                          "FigureS3C_coldwaterhabitat_propreachkm_allscenariocurves_20C.png"),
+#        width = 6.5, height = 5, units = "in", dpi = 600)
+```
+
+
+
+```{r fig.height=10, fig.width=6.5, warning = FALSE, message = FALSE}
+temp_threshold_propreachkm_panel <- 
+  cowplot::plot_grid(
+    siteprop18_comboclimrest_plot + ggbreak::scale_y_break(c(2, 2.5), scales = c(0.2,0.8) ),
+    siteprop19_comboclimrest_plot + ggbreak::scale_y_break(c(2, 2.5), scales = c(0.2,0.8) ),
+    siteprop20_comboclimrest_plot,
+    ncol = 1, rel_heights = c(1,1,1.4), 
+    align = "v",
+    axis = "lr",
+    labels = c(" A"," B"," C"), 
+    label_y = c(1.01,1.01,1.01)
+  ) + 
+  theme(plot.background = element_rect(fill = "white", color = NA))
+temp_threshold_propreachkm_panel
+```
+
+
+
+```{r}
+ggsave(plot = temp_threshold_propreachkm_panel,
+       filename = paste0("../figures/",
+                         "FigureS3_coldwaterhabitat_propreachkm_allscenariocurves_PANEL.png"),
+       width = 6.5, height = 10, units = "in", dpi = 600)
+
+# ggsave(plot = siteprop20_comboclimrest_plot,
+#        filename = paste0("../figures/",
+#                          "FigureS3_coldwaterhabitat_propreachkm_allscenariocurves_PANEL.eps"),
+#        device = cairo_ps,
+#        width = 6.5, height = 4, units = "in", dpi = 600)
+```
+
+
+
+## Fig S4. Observed data temporal availability  
+
+```{r warning=FALSE, message = FALSE}
+# number of unique sites for july data
+july_year_count_plot <- 
+  obs_df |> st_drop_geometry() |>
+  # july_data00 |> 
+  reframe(.by = stn_id_num, year_n = n()) |> 
+  ggplot(aes(x = year_n)) +
+  geom_density() + 
+  theme_classic() +
+  scale_x_continuous(n.breaks = 7) +
+  labs(x = "Record length for a site (years)",
+       # title = "Observation sites by record length density", 
+       y = "Site density")  
+
+# plot density of temperature data for years used in model fit
+data_density_by_year_plot <-
+  ggplot(data = obs_df) +
+  geom_density(aes(x = smpl_year)) + 
+  theme_classic() +
+  scale_x_continuous(n.breaks = 7) +
+  labs(x = "Year", 
+       # title = "Observation site records per year density",
+       y = "Site density")  
+
+(observation_data_panel_plot <-
+    cowplot::plot_grid(data_density_by_year_plot,july_year_count_plot,
+                       nrow = 2,labels = c("A","B")) )
+
+ggsave(plot = observation_data_panel_plot, 
+       filename = "../figures/FigureS4_obs_data_panel_plot.png",
+       width = 6.5, height = 6.5, units = "in", dpi = 1200)
+```
+
+
+## Fig S5. Observed data correlation plot  
+
+
+```{r}
+corrplot_df <- obs_df |> st_drop_geometry() |>
+  select(ssnid, rid, stn_id_num, pid, smpl_year, starts_with("WT_"),
+         AreaKm2, dJLtavg, BFIc, CPY100x, v2elevm, NIDDENw)
+
+# function to plot correlation coefficients for FWS formatting/publication
+my_cor <- function(data, mapping, ...){
+  x <- rlang::eval_tidy(mapping$x, data)
+  y <- rlang::eval_tidy(mapping$y, data)
+  # convert to numeric if needed
+  x <- as.numeric(x)
+  y <- as.numeric(y)
+  corr <- round(cor(x, y, use = "complete.obs"), 2)
+  ggplot() +
+    annotate("text", x = 0.5, y = 0.5,
+             label = paste0("Corr:\n",corr), size = 4) +
+    theme_void()
+}
+```
+
+```{r fig.width = 7.5, fig.height=7.5, message = FALSE}
+corrplot <- corrplot_df |>
+   select(WT_avg, AreaKm2, dJLtavg, BFIc, CPY100x, v2elevm, NIDDENw) |>
+   ggpairs(
+     columnLabels =   
+       c("Mean July\nwater temp.\n(\u00B0C)",
+         " Drainage\narea\n(km\u00b2)",
+         " Mean July\nair temp.\n(\u00B0C)",
+         " Baseflow\nindex",
+         " Riparian\ncanopy\ncover (%)",
+         " Elevation\n(m)",
+         " Dam\ndensity\n(dams/km\u00b2)" ),
+     # title = "Correlation Plot of Model Variables",
+     upper = list(continuous = wrap(my_cor)),  # show correlation coefficients
+     # scatterplots with smooth lines
+     lower = list(continuous = GGally::wrap("smooth", colour = "grey40", 
+                                            alpha = 0.25, size = 1.5)),       
+     diag = list(continuous = "barDiag")) +              # histograms on diagonal
+     theme(axis.text.x = element_text(angle = 40, hjust = 1))
+corrplot
+```
+
+
+```{r message=FALSE, warning=FALSE}
+ggsave(corrplot, width = 7.5, height = 7.5, dpi = 1200, units = "in",
+       filename = "../figures/FigureS5_modelvariable_correlationpot.png")
+```
+
+
+
+## Covariate Summary Statistics  
+
+
+### Fig S6. Covariate boxplots  
+
+```{r}
+cov_df <- 
+  bind_rows(obs_df |> st_drop_geometry() |> mutate(Data = "obs") |> 
+              select(Data, AreaKm2, dJLtavg, BFIc, CPY100x, v2elevm, NIDDENw) |>
+              pivot_longer(cols = !Data, names_to = "Covariate",values_to = "value"), 
+            preds_df |> st_drop_geometry() |> mutate(Data = "preds") |> 
+              select(Data, AreaKm2, dJLtavg, BFIc, CPY100x, v2elevm, NIDDENw) |>
+              pivot_longer(cols = !Data, names_to = "Covariate",values_to = "value")) |>
+  mutate(Covariate = factor(Covariate,
+                            levels = c("BFIc",
+                                       "CPY100x",
+                                       "NIDDENw",
+                                       "AreaKm2",
+                                       "v2elevm",
+                                       "dJLtavg"
+                            ),
+                            labels = c("Baseflow Index (BFI)", 
+                                       "Canopy cover (%)",
+                                       "Dam density (dams/km\u00b2)",
+                                       "Drainage Area (km\u00b2)",
+                                       "Elevation (m a.s.l.)",
+                                       "Mean July air temperature (\u00B0C)"
+                            ) ) ) |>
+  mutate(across(where(is.numeric), ~ pmax(.x, 0.000001)))
+```
+
+
+```{r fig.width=6.5, fig.height=5, message = FALSE, warning = FALSE}
+(cov_summary_plot <- 
+   ggplot(data = cov_df, aes(x = Covariate, fill = Data, y = value)) +
+   # geom_violin(quantiles = c(0.25,0.5,0.75)) +
+   geom_boxplot(position = position_dodge(width = 1),
+                median.linewidth = 1) +
+   stat_summary(fun = mean, geom = "crossbar", width = 0.7, size = 0.4,
+                position = position_dodge(width = 1), linetype = "dotted") +
+   theme_bw() +
+   scale_fill_manual(breaks = c("obs", "preds"),
+                      values = c("white","grey70"),
+                      labels = c("Observation sites","Prediction sites")) +
+   theme(legend.position = "inside", legend.position.inside = c(0.125,-0.062),
+         legend.direction = "horizontal", legend.background = element_blank(),
+         legend.title = element_blank()) +
+   labs(y = "Covariate value", 
+        caption = "\nBoxplot crossbar statistic: Solid = median; Dotted = mean") +
+   facet_wrap(~ Covariate, scales = "free") +
+   theme(axis.title.x = element_blank(),
+         axis.text.x = element_blank(),
+         axis.ticks.x = element_blank()) +
+   ggh4x::facetted_pos_scales(
+     y = list(Covariate == "Dam density" ~ scale_y_log10(labels = scales::label_number()),
+              Covariate == "Drainage Area" ~ scale_y_log10(labels = scales::label_number()) )
+   ) 
+)
+```
+
+```{r message = FALSE, warning = FALSE}
+ggsave(plot = cov_summary_plot,
+       filename = "../figures/FigureS6_covariate_summary_boxplot.png",
+       width = 6.5,height = 5, dpi = 600, units = "in")
+
+# ggsave(plot = cov_summary_plot,
+#        filename = "../figures/FigureSXY_covariate_summary_boxplot.eps",
+#        device = cairo_ps,
+#        width = 6.5,height = 5, dpi = 600, units = "in")
+```
+
+
+
+### Table S1. Covariate Summary Statistics Table  
+
+
+```{r}
+preds_cov_df <- preds_df |>
+  st_drop_geometry() |>
+  select(AreaKm2, dJLtavg, BFIc, CPY100x, v2elevm, NIDDENw) |>
+  summarise(
+    across(
+      where(is.numeric),
+      list(
+        mean   = ~ mean(.x, na.rm = TRUE),
+        median = ~ median(.x, na.rm = TRUE),
+        min    = ~ min(.x, na.rm = TRUE),
+        max    = ~ max(.x, na.rm = TRUE),
+        q1     = ~ quantile(.x, 0.25, na.rm = TRUE, names = FALSE),
+        q3     = ~ quantile(.x, 0.75, na.rm = TRUE, names = FALSE)
+      ),
+      .names = "{.col}_{.fn}"
+    )
+  ) |>
+  pivot_longer(everything(), names_to  = c("variable", "stat"),
+               names_sep = "_", values_to = "value" ) |>
+  pivot_wider(names_from  = stat, values_from = value )|>
+  mutate(Data = "Prediction sites")
+```
+
+
+```{r}
+obs_cov_df <- obs_df |> st_drop_geometry() |>
+  select(AreaKm2, dJLtavg, BFIc, CPY100x, v2elevm, NIDDENw) |>
+  summarise(
+    across(
+      where(is.numeric),
+      list(
+        mean   = ~ mean(.x, na.rm = TRUE),
+        median = ~ median(.x, na.rm = TRUE),
+        min    = ~ min(.x, na.rm = TRUE),
+        max    = ~ max(.x, na.rm = TRUE),
+        q1     = ~ quantile(.x, 0.25, na.rm = TRUE, names = FALSE),
+        q3     = ~ quantile(.x, 0.75, na.rm = TRUE, names = FALSE)
+      ),
+      .names = "{.col}_{.fn}"
+    )
+  ) |>
+  pivot_longer(everything(), names_to  = c("variable", "stat"),
+               names_sep = "_", values_to = "value" ) |>
+  pivot_wider(names_from  = stat, values_from = value ) |>
+  mutate(Data = "Observation sites")
+```
+
+```{r}
+cov_summary_df <- bind_rows(obs_cov_df, preds_cov_df) |>
+  mutate(Covariate = factor(variable,
+                            levels = c("AreaKm2","BFIc","CPY100x","dJLtavg","NIDDENw","v2elevm"),
+                            labels = c("Drainage Area", "Baseflow Index (BFI)", 
+                                       "Canopy cover", "Mean July air temperature", 
+                                       "Dam density", "Elevation")),
+         units = factor(variable,
+                        levels = c("AreaKm2","BFIc","CPY100x","dJLtavg","NIDDENw","v2elevm"),
+                        labels = c("km\u00b2", "unitless (0-100)", "%", "\u00B0C", 
+                                   "dams per km\u00b2", "meters"))  ) |>
+  mutate(across(where(is.numeric), ~ sprintf("%.2f", .x))) |>
+  arrange(Covariate, Data) |>
+  select(Covariate, units, Data, min, q1, mean, median, q3, max)
+
+DT::datatable(cov_summary_df)
+
+
+write_csv(cov_summary_df, "../tables/TableS1_covariate_summary_stats.csv")
+```
+
+**Note:** Mean July air temperature for predictions can have a lower maximum than the observation data set because the prediction values are *average* values across the 1990-2022 period rather than a single year's mean July air temperature. Consequently, that single year could potentially be higher than the historical average air temperature at a reach. This may come as a surprise on initial glance at the table because it's generally expected that the predictions cover a wider range of values across the study extent, which is the case for all the other covaraites.  
+
+<br>  
+
+## Scenarios prediction maps  
+
+
+```{r fig.width = 6.5, fig.height=4.5}
+# generate standardized color palette
+temp_palette <- 
+  colorRampPalette(rev(RColorBrewer::brewer.pal(10, "RdYlBu") ))
+sc <- scale_colour_gradientn(colors = temp_palette(100), 
+                             limits=c(10, 36),
+                             guide = guide_colorbar(
+                               title = "Temperature (\u00B0C)",
+                               # position = "bottom",
+                               direction = "horizontal",
+                               title.position = "top",
+                               label.position = "bottom",
+                               barwidth  = unit(6, "cm"),
+                               barheight = unit(4, "mm"),
+                               ticks = TRUE),
+                             na.value = "black")
+```
+
+```{r}
+# Create the main map of Massachusetts with a Cividis discrete color palette
+main_map_scenario <- ggplot() +
+  # Add the state boundary
+  geom_sf(data = ma_state_boundary, fill = NA, color = "grey20", linewidth = 0.5) +
+  # add stream network with drainage area weighted linewidth 
+  # geom_sf(data = filter(ma_streams_sf, TotDASqKM < 2550 & Tw_rcnt < 34),
+  #         aes(linewidth = TotDASqKM) , color = "#A6CEE3", lineend = "round") + 
+  # scale_linewidth(range = c(0.1, 1.25)) +
+  
+  # add Connecticut and Merrimack Rivers
+  geom_sf(data = filter(ma_streams_sf, TotDASqKM > 5000), 
+          color = "grey30", linewidth = 1, lineend = "round") +
+  geom_text(aes(x = -8080000, y = 5291000 , hjust = 1),
+            label  = "Connecticut River", size = 3) +
+  geom_text(aes(x = -8020000, y = 5291000, hjust = 0),
+            label  = "Merrimack River", size = 3) +
+  
+  # add the observation sites
+  geom_sf(data = obs_df, 
+          # fill = "grey80", shape = 21,
+          color = "black", shape = 1,
+          stroke = 0.2, size = 2) +
+  
+  # Add North Arrow
+  annotation_north_arrow(
+    location = "tr",       # Top right location
+    which_north = "true",
+    pad_x = unit(0.2, "in"), # Padding from the edge
+    pad_y = unit(0.2, "in"),
+    style = north_arrow_fancy_orienteering # A decorative style
+  ) +
+  
+  # Add Scale Bar
+  annotation_scale(
+    location = "tr",       # Bottom left location
+    bar_cols = c("black", "white"),
+    # text_family = "Arial",
+    width_hint = 0.18,      # Relative width of the scale bar (30% of map width)
+    pad_y = unit(3, "cm")
+  ) +
+  
+  # Set map coordinates
+  coord_sf(crs = 3857) +
+  theme_void() +
+  # sc +
+  theme(axis.title = element_blank(), 
+        legend.position = "inside", legend.position.inside = c(0.2,0.45), 
+        legend.background = element_rect(fill = "white"),
+        plot.background = element_rect(fill = "white")
+        )
+
+```
+
+
+### Recent climate (1990-2022) maps 
+
+```{r fig.width = 6.5, fig.height=5, warning=FALSE, message = FALSE}
+scenario_rcnt_ggplot <- 
+  ggdraw(main_map_scenario + 
+           geom_sf(data = filter(ma_streams_sf, TotDASqKM < 2550 & Tw_rcnt < 34), 
+                   aes(color = Tw_rcnt, linewidth = TotDASqKM), 
+                   lineend = "round") +
+           coord_sf(crs = 3857,
+                    xlim = c(map_extent[1], map_extent[3]),
+                    ylim = c(map_extent[2]-50000, map_extent[4]),
+                    expand = FALSE)  +
+           scale_linewidth(range = c(0.25, 1.25), guide = "none") +
+           labs(title = "    Recent climate: air temperature averaged across 1990-2022"
+           ) + 
+           sc
+  )  +
+  draw_plot(NA_map_ggplot, x = 0.02, y = -0.03, width = 0.35, height = 0.4) +
+  draw_plot(ne_inset, x = 0.3, y = 0, width = 0.35, height = 0.4) 
+
+# ggsave(plot = scenario_rcnt_ggplot,
+#        filename = "../figures/FigureSXX_temp_map_rcnt.png",
+#        width = 6.5,height = 5, dpi = 600, units = "in")
+```
+
+
+
+```{r fig.width = 6.5, fig.height=5, warning=FALSE, message = FALSE}
+scenario_rcntdam_ggplot <- 
+  ggdraw(main_map_scenario + 
+           geom_sf(data = filter(ma_streams_sf, TotDASqKM < 2550 & Tw_rcnt < 34), 
+                   aes(color = Tw_rcntdam, linewidth = TotDASqKM), 
+                   lineend = "round") +
+           coord_sf(crs = 3857,
+                    xlim = c(map_extent[1], map_extent[3]),
+                    ylim = c(map_extent[2]-50000, map_extent[4]),
+                    expand = FALSE)  +
+           scale_linewidth(range = c(0.25, 1.25), guide = "none") +
+           labs(title = "    Recent climate + dam removal (remove 1 dam/10km\u00b2)"
+           ) + 
+           sc
+  )  +
+  draw_plot(NA_map_ggplot, x = 0.02, y = -0.03, width = 0.35, height = 0.4) +
+  draw_plot(ne_inset, x = 0.3, y = 0, width = 0.35, height = 0.4) 
+
+# ggsave(plot = scenario_rcntdam_ggplot,
+#        filename = "../figures/FigureSXX_temp_map_rcntdam.png",
+#        width = 6.5,height = 5, dpi = 600, units = "in")
+```
+
+
+
+```{r fig.width = 6.5, fig.height=5, warning=FALSE, message = FALSE}
+scenario_rcntshade_ggplot <- 
+  ggdraw(main_map_scenario + 
+           geom_sf(data = filter(ma_streams_sf, TotDASqKM < 2550 & Tw_rcnt < 34), 
+                   aes(color = Tw_rcntshade, linewidth = TotDASqKM), 
+                   lineend = "round") +
+           coord_sf(crs = 3857,
+                    xlim = c(map_extent[1], map_extent[3]),
+                    ylim = c(map_extent[2]-50000, map_extent[4]),
+                    expand = FALSE)  +
+           scale_linewidth(range = c(0.25, 1.25), guide = "none") +
+           labs(title = "    Recent climate + restored riparian shade (+10% reach shade)"
+           ) + 
+           sc
+  )  +
+  draw_plot(NA_map_ggplot, x = 0.02, y = -0.03, width = 0.35, height = 0.4) +
+  draw_plot(ne_inset, x = 0.3, y = 0, width = 0.35, height = 0.4) 
+
+# ggsave(plot = scenario_rcntshade_ggplot,
+#        filename = "../figures/FigureSXX_temp_map_rcntshade.png",
+#        width = 6.5,height = 5, dpi = 600, units = "in")
+```
+
+
+
+```{r fig.width = 6.5, fig.height=5, warning=FALSE, message = FALSE}
+scenario_damshade_ggplot <- 
+  ggdraw(main_map_scenario + 
+           geom_sf(data = filter(ma_streams_sf, TotDASqKM < 2550 & Tw_rcnt < 34), 
+                   aes(color = Tw_rcntdamshade, linewidth = TotDASqKM), 
+                   lineend = "round") +
+           coord_sf(crs = 3857,
+                    xlim = c(map_extent[1], map_extent[3]),
+                    ylim = c(map_extent[2]-50000, map_extent[4]),
+                    expand = FALSE)  +
+           scale_linewidth(range = c(0.25, 1.25), guide = "none") +
+           labs(title = "    Recent climate + dam removal + shade restoration"
+           ) + 
+           sc
+  )  +
+  draw_plot(NA_map_ggplot, x = 0.02, y = -0.03, width = 0.35, height = 0.4) +
+  draw_plot(ne_inset, x = 0.3, y = 0, width = 0.35, height = 0.4) 
+
+# ggsave(plot = scenario_damshade_ggplot,
+#        filename = "../figures/FigureSXX_temp_map_rcntdamshade.png",
+#        width = 6.5,height = 5, dpi = 600, units = "in")
+```
+
+#### Figure S7 Panel 
+
+```{r fig.width = 13, fig.height=10, warning=FALSE, message = FALSE}
+recent_scenario_maps <- 
+  cowplot::plot_grid(scenario_rcnt_ggplot, scenario_rcntdam_ggplot, 
+                   scenario_rcntshade_ggplot, scenario_damshade_ggplot,
+                   labels = c("A","B","C","D"), 
+                   nrow = 2, ncol = 2,
+                   label_x = -0.001) + 
+  theme(plot.background = element_rect(fill = "white",color = NA))
+recent_scenario_maps
+
+ggsave(plot = recent_scenario_maps, 
+       filename = "../figures/FigureS7_temp_maps_recent_climate.png",
+       width = 13, height = 10, dpi = 600, units = "in")
+```
+
+
+
+### Future climate (+2\u00B0C air temp) maps 
+
+```{r fig.width = 6.5, fig.height=5, warning=FALSE, message = FALSE}
+scenario_futr_ggplot <- 
+  ggdraw(main_map_scenario + 
+           geom_sf(data = filter(ma_streams_sf, TotDASqKM < 2550 & Tw_rcnt < 34), 
+                   aes(color = Tw_futr, linewidth = TotDASqKM), 
+                   lineend = "round") +
+           coord_sf(crs = 3857,
+                    xlim = c(map_extent[1], map_extent[3]),
+                    ylim = c(map_extent[2]-50000, map_extent[4]),
+                    expand = FALSE)  +
+           scale_linewidth(range = c(0.25, 1.25), guide = "none") +
+           labs(title = "    Future climate warming: mean July air temperature +2\u00B0C"
+           ) + 
+           sc
+  )  +
+  draw_plot(NA_map_ggplot, x = 0.02, y = -0.03, width = 0.35, height = 0.4) +
+  draw_plot(ne_inset, x = 0.3, y = 0, width = 0.35, height = 0.4) 
+
+# ggsave(plot = scenario_futr_ggplot,
+#        filename = "../figures/FigureSXX_temp_map_futr.png",
+#        width = 6.5,height = 5, dpi = 600, units = "in")
+```
+
+
+```{r fig.width = 6.5, fig.height=5, warning=FALSE, message = FALSE}
+scenario_futrdam_ggplot <- 
+  ggdraw(main_map_scenario + 
+           geom_sf(data = filter(ma_streams_sf, TotDASqKM < 2550 & Tw_rcnt < 34), 
+                   aes(color = Tw_futrdam, linewidth = TotDASqKM), 
+                   lineend = "round") +
+           coord_sf(crs = 3857,
+                    xlim = c(map_extent[1], map_extent[3]),
+                    ylim = c(map_extent[2]-50000, map_extent[4]),
+                    expand = FALSE)  +
+           scale_linewidth(range = c(0.25, 1.25), guide = "none") +
+           labs(title = "    Future climate + dam removal (remove 1 dam/10km\u00b2)"
+           ) + 
+           sc
+  )  +
+  draw_plot(NA_map_ggplot, x = 0.02, y = -0.03, width = 0.35, height = 0.4) +
+  draw_plot(ne_inset, x = 0.3, y = 0, width = 0.35, height = 0.4) 
+
+# ggsave(plot = scenario_futrdam_ggplot,
+#        filename = "../figures/FigureSXX_temp_map_futrdam.png",
+#        width = 6.5,height = 5, dpi = 600, units = "in")
+```
+
+
+
+```{r fig.width = 6.5, fig.height=5, warning=FALSE, message = FALSE}
+scenario_futrshade_ggplot <- 
+  ggdraw(main_map_scenario + 
+           geom_sf(data = filter(ma_streams_sf, TotDASqKM < 2550 & Tw_rcnt < 34), 
+                   aes(color = Tw_futrshade, linewidth = TotDASqKM), 
+                   lineend = "round") +
+           coord_sf(crs = 3857,
+                    xlim = c(map_extent[1], map_extent[3]),
+                    ylim = c(map_extent[2]-50000, map_extent[4]),
+                    expand = FALSE)  +
+           scale_linewidth(range = c(0.25, 1.25), guide = "none") +
+           labs(title = "    Future climate + restored riparian shade (+10% reach shade)"
+           ) + 
+           sc
+  )  +
+  draw_plot(NA_map_ggplot, x = 0.02, y = -0.03, width = 0.35, height = 0.4) +
+  draw_plot(ne_inset, x = 0.3, y = 0, width = 0.35, height = 0.4) 
+
+# ggsave(plot = scenario_futrshade_ggplot,
+#        filename = "../figures/FigureSXX_temp_map_futrshade.png",
+#        width = 6.5,height = 5, dpi = 600, units = "in")
+```
+
+
+
+```{r fig.width = 6.5, fig.height=5, warning=FALSE, message = FALSE}
+scenario_futrdamshade_ggplot <- 
+  ggdraw(main_map_scenario + 
+           geom_sf(data = filter(ma_streams_sf, TotDASqKM < 2550 & Tw_rcnt < 34), 
+                   aes(color = Tw_futrdamshade, linewidth = TotDASqKM), 
+                   lineend = "round") +
+           coord_sf(crs = 3857,
+                    xlim = c(map_extent[1], map_extent[3]),
+                    ylim = c(map_extent[2]-50000, map_extent[4]),
+                    expand = FALSE)  +
+           scale_linewidth(range = c(0.25, 1.25), guide = "none") +
+           labs(title = "    Future climate + dam removal + shade restoration"
+           ) + 
+           sc
+  )  +
+  draw_plot(NA_map_ggplot, x = 0.02, y = -0.03, width = 0.35, height = 0.4) +
+  draw_plot(ne_inset, x = 0.3, y = 0, width = 0.35, height = 0.4) 
+
+# ggsave(plot = scenario_futrdamshade_ggplot,
+#        filename = "../figures/FigureSXX_temp_map_futrdamshade.png",
+#        width = 6.5,height = 5, dpi = 600, units = "in")
+```
+
+#### Figure S8 Panel  
+
+```{r fig.width = 13, fig.height=10, warning=FALSE, message = FALSE}
+future_scenario_maps <- 
+  cowplot::plot_grid(scenario_futr_ggplot, scenario_futrdam_ggplot, 
+                     scenario_futrshade_ggplot, scenario_futrdamshade_ggplot,
+                     labels = c("A","B","C","D"), 
+                     nrow = 2, ncol = 2,
+                     label_x = -0.001) + 
+  theme(plot.background = element_rect(fill = "white",color = NA))
+future_scenario_maps
+
+ggsave(plot = future_scenario_maps, 
+       filename = "../figures/FigureS8_temp_maps_future_climate.png",
+       width = 13, height = 10, dpi = 600, units = "in")
+```

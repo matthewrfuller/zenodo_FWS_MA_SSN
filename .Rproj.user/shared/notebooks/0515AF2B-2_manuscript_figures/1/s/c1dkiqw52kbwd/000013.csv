@@ -1,0 +1,5 @@
+"0",""
+"0","# Final map with insets"
+"0","# (elevation_map <- ggdraw(main_map_cividis) )+"
+"0","#   draw_plot(NA_map_ggplot, x = 0.02, y = 0.02, width = 0.3, height = 0.4) +"
+"0","#   draw_plot(ne_inset, x = 0.25, y = 0.05, width = 0.35, height = 0.4)  )"

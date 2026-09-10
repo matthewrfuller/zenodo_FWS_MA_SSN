@@ -1,0 +1,514 @@
+# Goal of this script is to read in all the data for observation and prediction
+# sites, join and transform all variables into individual obs and preds site
+# data frames that can be inserted back into the ssn object and saved for model 
+# fitting and predictions. This script exports a final ssn object that can be
+# imported into later model fitting scripts. This will unify and simplify these
+# later scripts with an identical input for analysis.
+
+
+
+# library(devtools); install_github("USEPA/SSN2", dependencies=TRUE, force=FALSE)
+# remotes::install_github("USEPA/SSN2", ref = "develop")
+library(tidyverse)
+library(foreign)
+library(sf)
+library(SSN2)
+
+
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Functions                                                                ####
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# standardize variable function
+source(file = "./scripts/helperfnx/ssn_standardize_variables_function.R")
+
+# Standardize a prediction data set based on the observed data set function
+source(file = "./scripts/helperfnx/ssn_standardize_prediction_variables_function.R")
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~####
+
+
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# read in SSN Object and distance matrices(.ssn)                           ####
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Read in the SSN object and prediction sites contained in the "preds10288" 
+# predictions slot of the SSN object. (< 1 min to load)
+ssn_obj <- ssn_import(path = paste0(getwd(),"/ssnobj/lsn_july.ssn"), 
+                      overwrite = TRUE, 
+                      predpts = "preds10288.shp")
+
+# Create the network-wise distance matrix between all observation and 
+# prediction sites. (< 1 min) 
+# ssn_create_distmat(ssn_obj, predpts = "preds10288", overwrite = TRUE)
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~####
+
+
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#                    Read in data                                          ####
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# import field name key to shorten names written to dbf/shp files in SSN object
+field_name_key <- read_csv("./data/field_names_key.csv")
+
+
+# read in key to crosswalk COMID and prediction site ssnid 
+preds_comidssnid_key <- read_csv("data/preds_comid_ssnid_key.csv")
+
+
+# xgboost data for MA [JOIN BY COMID]
+xgb_data <- read_csv(file = "./data/mastath-flowlines.csv") %>%
+  select(-BASIN_ID, -BASIN, -HUC8, -starts_with(c("TEMP_","TAIR_SUM")))
+# reduces name length for ssn object export (.dbf chr limits <= 10)
+data.table::setnames(xgb_data, 
+                     field_name_key$name_lg, field_name_key$name_sh, 
+                     skip_absent = TRUE)
+
+# read in StreamCat data for prediction sites [JOIN BY COMID]
+streamcat_df <- read_csv("./data/streamcat_forssn.csv")
+
+
+# NHDPlusV2 slope and elevation data
+nhdv2_slopeelev <- bind_rows(read.dbf(file = "data/NHDV2NE_ELEVSLOPE.dbf"),
+                             read.dbf(file = "data/NHDV2MA_ELEVSLOPE.dbf")) |>
+  rowwise() |>
+  mutate(v2elevm = mean(MAXELEVSMO,MINELEVSMO)/100 ) |> ungroup() |>
+  select(COMID, v2elevm, v2slope = SLOPE)
+           
+
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#                    OBSERVATION DATA                                      ####
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#  OBSERVATION SITE DATA                                                   ####
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Below contains the mean monthly temp data that can be joined to the
+# observation site (obs) data in the ssn object along with the covariate data.
+
+
+# *** TIP *** ALWAYS JOIN TO THIS DATA FOR OBS VIA EITHER SSNID OR COMID
+
+july_data00 <- read_csv(file = "./data/obs_sc_july_avg_df.csv") |>
+  left_join(read_csv(file = "./data/daymet_obs.csv"), 
+            by = c("ssnid","smpl_year") )  |>
+  left_join(xgb_data, by = "COMID") |>
+  left_join(nhdv2_slopeelev, by = "COMID") |>
+  rename(WT_min = avg_min_WT, WT_avg = avg_mean_WT, WT_max = avg_max_WT) |>
+  select(-ends_with("_AT"))
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~####
+
+
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# PREDICTION SITE DATA                                                     ####
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# import daymet data for prediction sites [JOIN BY SSNID]
+daymetpreds07 <- read_csv(file = "./data/daymet_preds.csv") %>% 
+  filter(smpl_year != 1994)  %>% 
+  reframe(.by = ssnid,
+          dJLprcp = mean(d07_prcp), # mean values covering full data range
+          dJLtavg = mean(d07_tavg), # mean values covering full data range
+          dJLtmin = mean(d07_tmin), # mean values covering full data range
+          dJLtmax = mean(d07_tmax), # mean values covering full data range
+          dJL7ddm = mean(d07_7ddm), # mean values covering full data range
+          dJL1ddm = mean(d07_1ddm)) # mean values covering full data range 
+
+
+
+# join XGBoost to StreamCat data by COMID
+preds_cov_data <-  
+  left_join(xgb_data, streamcat_df, by = "COMID") |>
+  right_join(preds_comidssnid_key, by = "COMID") |>
+  left_join(daymetpreds07, by = "ssnid") |>
+  left_join(nhdv2_slopeelev, by = "COMID")
+
+# identifies if there are any infinite or NA values in the data frame
+names(preds_cov_data)[apply(preds_cov_data, 2, 
+                            function(x) any(is.na(x) | is.infinite(x)))]
+# should be "character(0)" if the data have zero NAs, Inf, or -Inf values
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~####
+
+
+
+# code below to explore missing streamcat variables that are producing NAs in predictions
+# preds_cov_data_na <- preds_cov_data |>
+#   filter(if_any(everything(), is.na))
+# 
+# 
+# preds_cov_data_na$COMID[!(preds_cov_data_na$COMID %in% sc_data_raw_df$COMID)]
+# 
+# sc_data_raw_df <- read_csv("./data/streamcat_data_20231024.csv")
+# 
+# 
+# write.csv(paste(preds_cov_data_na$COMID, collapse = ","), file = "./tables/pred_na_comids.csv")
+
+
+
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Standardize observation covariate data                                   ####
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Extract observation site data frame from SSN object and join to temperature data for the month.  
+ssn_obs_df00 <- ssn_get_data(ssn_obj, name = "obs") %>%
+  select(everything(),-station_id, -smpl_year, -contains(c("avg_","sum_","NEAR_", "itude")),
+         AreaKm2 = TotAreaKm2) %>%
+  left_join(july_data00, by = "ssnid") %>%
+  mutate(yearf = as.factor(smpl_year), 
+         stn_id = as.factor(stn_id_num)) %>%
+  rename(dJLtavg = d07_tavg, dJLtmin = d07_tmin, dJLtmax = d07_tmax, 
+         dJLprcp = d07_prcp, dJL7ddm = d07_7ddm, dJL1ddm = d07_1ddm) %>%
+  mutate(ATJL0C = dJLtavg,
+         ATJL2C = dJLtavg,     # THESE LEFT AS ORIGINAL AIR TEMP SO PREDICTION
+         ATJL4C = dJLtavg,     # STANDARDIZATION IS BASED ON BASE-LEVEL (+0 degC)
+         ATJL6C = dJLtavg,     # AIR TEMPERATURE MEAN AND STANDARD DEVIATIONS
+         ATJL8C = dJLtavg) %>% # AND NOT THE ADJUSTED (+# degC) TEMPS
+  mutate(CPYadd05 = CPY100x,  # THESE LEFT AS ORIGINAL CANOPY COVER IN THE OBS
+         CPYadd10 = CPY100x,  # DATA SO THAT THE STANDARDIZATIONS CAN BE MADE 
+         CPYadd15 = CPY100x,  # RELATIVE TO THE ORIGINAL DATA MEAN AND SD 
+         CPYadd20 = CPY100x,  # RATHER THAN THE MODIFIED VALUES
+         CPYadd25 = CPY100x,
+         CPYadd30 = CPY100x,
+         CPYadd35 = CPY100x,
+         CPYadd40 = CPY100x,
+         CPYadd45 = CPY100x,
+         CPYadd50 = CPY100x,
+         CPYmax = CPY100x) %>%
+  mutate(dam1 = NIDDENw,
+         dam2 = NIDDENw,
+         dam3 = NIDDENw, 
+         dam4 = NIDDENw,
+         dam5 = NIDDENw)
+
+ssn_obs_df01 <- ssn_obs_df00  %>% st_drop_geometry()  
+
+# identifies if there are any infinite or NA values in the data frame
+# names(ssn_obs_df01)[apply(ssn_obs_df01, 2, function(x) any(is.na(x) | is.infinite(x)))]
+# should be "character(0)" if the data have zero NAs, Inf, or -Inf values
+
+
+
+
+# Standardize the continuous variables used in the model fit so their estimated coefficients can be compared directly.  
+
+# select the continuous variable names from the covariate data frame
+continuous_var_names <- 
+  names(select(ssn_obs_df01, where(is.numeric), 
+               -ssnid, -smpl_year, -contains("WT_"), -starts_with("NEAR_"), 
+               -stn_id_num, -stn_id, -COMID
+  ) )
+
+# extract the continuous data columns
+cont_cov_data <- dplyr::select(ssn_obs_df01, all_of(continuous_var_names))  
+saveRDS(object = cont_cov_data, file = "./data/continuous_obs_vars.RDS")
+
+# apply the "stand()" function across all columns to standardize each covariate
+cont_cov_data_stdzd <- apply(cont_cov_data,2,stand)
+
+# add prefix ("s") to standardized column names
+colnames(cont_cov_data_stdzd) <- paste0("s", continuous_var_names)
+
+# join standardized data to original data frame
+ssn_obs_df01_stdzd <- bind_cols(ssn_obs_df00, cont_cov_data_stdzd)
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~####
+
+data.frame(fld_name = names(ssn_obs_df01_stdzd)) |> 
+  mutate(nchar = nchar(fld_name)) |> filter(nchar >8)
+
+
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# split observation data into training and validation data                 ####
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# A set of observed station data is set aside from the model fitting process to be used as a validation test data set after a model has been selected. We do this by setting the validation data temperature measurements equal to NA in the ssn object so that they are not included in the model fitting process.
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~####
+
+
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Reinsert observation data back into SSN object for model fitting         ####
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ssn_obj_stdzd <- ssn_put_data(ssn_obs_df01_stdzd, ssn_obj, "obs")
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~####
+
+
+
+
+
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#                    PREDICTION DATA                                       ####
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# extract the prediction site data from the ssn object
+ssn_preds_df00 <- ssn_get_data(x = ssn_obj_stdzd, name = "preds10288") %>%
+  left_join(select(preds_cov_data, -COMID), by = "ssnid") %>%
+  mutate(stn_id = as.factor(pid),
+         yearf = factor(2016))  %>%
+  rename(AreaKm2 = TotAreaKm2)  %>%
+  mutate(ATJL0C = dJLtavg,
+         ATJL2C = dJLtavg+2,
+         ATJL4C = dJLtavg+4,
+         ATJL6C = dJLtavg+6,
+         ATJL8C = dJLtavg+8) %>%
+  mutate(CPYadd05 = if_else(CPY100x + 5 > 100, 100, CPY100x + 5),
+         CPYadd10 = if_else(CPY100x + 10 > 100, 100, CPY100x + 10),
+         CPYadd15 = if_else(CPY100x + 15 > 100, 100, CPY100x + 15),
+         CPYadd20 = if_else(CPY100x + 20 > 100, 100, CPY100x + 20),
+         CPYadd25 = if_else(CPY100x + 25 > 100, 100, CPY100x + 25),
+         CPYadd30 = if_else(CPY100x + 30 > 100, 100, CPY100x + 30),
+         CPYadd35 = if_else(CPY100x + 35 > 100, 100, CPY100x + 35),
+         CPYadd40 = if_else(CPY100x + 40 > 100, 100, CPY100x + 40),
+         CPYadd45 = if_else(CPY100x + 45 > 100, 100, CPY100x + 45),
+         CPYadd50 = if_else(CPY100x + 50 > 100, 100, CPY100x + 50),
+         CPYmax = 100)  %>%
+  mutate(dam1 = if_else(NIDDENw - 0.1 < 0, 0, NIDDENw - 0.1),
+         dam2 = if_else(NIDDENw - 0.2 < 0, 0, NIDDENw - 0.2),
+         dam3 = if_else(NIDDENw - 0.3 < 0, 0, NIDDENw - 0.3), 
+         dam4 = if_else(NIDDENw - 0.4 < 0, 0, NIDDENw - 0.4),
+         dam5 = if_else(NIDDENw - 0.5 < 0, 0, NIDDENw - 0.5))
+
+ssn_preds_df01 <- ssn_preds_df00 %>% st_drop_geometry() 
+
+# ssn_preds_df00$ssnid[is.na(ssn_preds_df00$NANMSTw)]
+# identifies if there are any infinite or NA values in the data frame
+names(ssn_preds_df01)[apply(ssn_preds_df01, 2, 
+                            function(x) any(is.na(x) | is.infinite(x)))]
+# should be "character(0)" if the data have zero NAs, Inf, or -Inf values
+
+# preds_na_comid_df <- 
+#   data.frame(COMIDNA = sort(ssn_preds_df01$COMID[is.na(ssn_preds_df01$TOT_BFI)]) )
+# write.dbf(preds_na_comid_df, file = "./data/preds_na_comid.dbf")
+
+
+
+# extract the continuous data columns
+cont_cov_data_preds <- dplyr::select(ssn_preds_df01, all_of(continuous_var_names))
+
+# use the "stdpreds()" function to standardize each prediction covariate
+# based on the observation data for each covariate in the fitted model
+cont_cov_data_preds_stdzd <- stdpreds(cont_cov_data_preds, cont_cov_data)
+
+
+
+# add prefix ("s_") to standardized column names
+colnames(cont_cov_data_preds_stdzd) <- paste0("s", continuous_var_names)
+
+# join standardized data to original data frame
+ssn_preds_df01_stdzd <- bind_cols(ssn_preds_df00,cont_cov_data_preds_stdzd)  
+
+# field name length checks. need to be <9 for writing to new ssn object (.ssn)
+data.frame(fld_name = names(ssn_preds_df01_stdzd)) |> 
+  mutate(nchar = nchar(fld_name)) |> filter(nchar >8)
+
+# put the data frame with standardized columns back into the ssn object
+ssn_obj_op_stdzd <-
+  ssn_put_data(ssn_preds_df01_stdzd, ssn_obj_stdzd, name = "preds10288")  
+
+# write out the prediction site covariate input data
+write_csv(ssn_preds_df01_stdzd, file =  "./tables/input_data_preds.csv" )
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~####
+
+
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Export ssn object with all standardized data                             ####
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ssn_write(ssn = ssn_obj_op_stdzd, 
+          path = "./ssnobj/MASSN_july_standardized.ssn",
+          overwrite = TRUE, copy_dist = TRUE)
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~####
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#                    PLOTS                                                 ####
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Plot the ssn object network and observation points                       ####
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+(ssn_obj_plot <-ggplot() +
+   # geom_sf(data = ssn_obj$edges) +
+   geom_sf(data = ssn_obj$preds$preds10288,
+           aes(color = "Preds"), size = 0.5, shape = 16,
+           show.legend = TRUE
+   ) +
+   geom_sf(data = ssn_obj$obs,
+           aes(color = "Obs"), size = 1.5, shape = 16,
+           show.legend = TRUE
+   ) +
+   theme_bw() + 
+   
+   labs(x = "Longitude", y = "Latitude", color = "Sites",
+        title = "Massachusetts network and site locations") +
+   scale_color_manual(values = c("Obs" = "darkred","Preds" = "pink"), 
+                      guide = guide_legend(override.aes = list(size = c(2,1)))) 
+)
+
+ggsave(plot = ssn_obj_plot, 
+       filename = "./figures/SSN_network_obs_sites_map.png",
+       width = 6.5, height = 4.5, units = "in", dpi = 300)
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~####
+
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Temporal coverage of observation data                                    ####
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Generate range of years covered by the monthly data as well as the a plot of 
+# the density of data from each year.  
+
+# range of years selected from random slice of site-year combos
+range(july_data00$smpl_year)
+
+# number of unique sites for july data
+(july_year_count_plot <- july_data00 |> 
+    reframe(.by = stn_id_num, year_n = n()) |> 
+    ggplot(aes(x = year_n)) +
+    geom_density() + 
+    theme_bw() +
+    scale_x_continuous(n.breaks = 7) +
+    labs(x = "Record length for a site (years)", 
+         title = "Observation sites by record length density")  )
+
+# plot density of temperature data for years used in model fit
+(data_density_by_year_plot <-
+    ggplot(data = july_data00) +
+    geom_density(aes(x = smpl_year)) + 
+    theme_bw() +
+    scale_x_continuous(n.breaks = 7) +
+    labs(x = "Year", title = "Observation site records per year density")  )
+
+(observation_data_panel_plot <-
+  cowplot::plot_grid(data_density_by_year_plot,july_year_count_plot,
+                     nrow = 2,labels = c("A)","B)")) )
+
+ggsave(plot = observation_data_panel_plot, 
+       filename = "./figures/fig_S1_obs_data_panel_plot.png",
+       width = 6.5, height = 6.5, units = "in", dpi = 600)
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~####
+
+
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Correlations among observation data variables                            ####
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Explore correlations among covariates to detect multicollinearity issues
+cov_corr_mtx <- cont_cov_data  %>% 
+  drop_na() %>%
+  cor()
+
+
+corpplot <- {
+  corrplot::corrplot.mixed(corr = cov_corr_mtx, 
+                           lower = "number", upper = "ellipse", diag = c("n"),
+                           tl.pos = c("lt"), tl.cex = 0.75, tl.col = 1, 
+                           title = "XGBoost Covariate Correlations",
+                           mar = c(0,0,3,0),
+                           number.digits = 1, number.cex = 0.4,
+                           lower.col = rev(corrplot::COL2('RdBu', 200)),
+                           upper.col = rev(corrplot::COL2('RdBu', 200)),
+                           cl.cex = 0.5, cl.align.text = "r")
+  
+  recordPlot()
+}
+
+ggsave(filename = "./figures/XGBoost_corrplot.png", 
+       plot = replayPlot(corpplot), 
+       width = 11, height = 11, units = "in", bg = NA, dpi = 300)
+
+
+cov_corr_mtx_filtered <- 
+  cov_corr_mtx[cov_corr_mtx >= -0.65 & cov_corr_mtx <= 0.65] <- NA
+
+corpplotfiltered <- {
+  # par(mai = c(0.5,2,2,0.5),
+  #     mar = c(0,0,0,0))
+  corrplot::corrplot.mixed(corr = cov_corr_mtx, 
+                           lower = "number", upper = "ellipse", diag = c("n"),
+                           tl.pos = c("lt"), tl.cex = 0.75, tl.col = 1, 
+                           title = "XGBoost Covariate Correlations Filtered (|r| > 0.65)",
+                           number.digits = 1, number.cex = 0.4,
+                           lower.col = rev(corrplot::COL2('RdBu', 200)),
+                           upper.col = rev(corrplot::COL2('RdBu', 200)),
+                           na.label = "square", na.label.col = "grey92",
+                           mar = c(0,0,3,0),
+                           cl.cex = 0.5, cl.align.text = "r")
+  
+  recordPlot()
+}
+
+ggsave(filename = "./figures/XGBoost_corrplot_filtered.png", 
+       plot = replayPlot(corpplotfiltered), 
+       width = 11, height = 11, units = "in", bg = NA, dpi = 300)
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~####
+
+
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Histograms and QQplots                                                   ####
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+cov_data_long <- cont_cov_data %>% 
+  pivot_longer(cols = -c(rid, ratio, upDist, afvArea, locID, netID, pid), names_to = "Covariate", values_to = "Measurement")
+
+(gg_histograms <- ggplot(data = cov_data_long,
+                         aes(x = Measurement)) +
+    geom_histogram(binwidth = function(x){
+      (diff(range(x)))/(ceiling(sqrt(length(x))))
+    } 
+    ) + 
+    theme_bw() +
+    facet_wrap(~Covariate, scales = "free")
+)
+
+
+(gg_qq <- ggplot(data = cov_data_long,
+                 aes(sample = Measurement)) +
+    geom_qq() + 
+    theme_bw() +
+    facet_wrap(~Covariate, scales = "free")
+)
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~####
+
+
+
+### Plot temp vs drainage area  
+
+
+# plot watershed area vs temperature
+ggplot() +
+  geom_point(data = ssn_obs_df01_stdzd,
+             aes(x = AreaKm2, y = WT_avg)) +
+  theme_bw() +
+  scale_x_log10() +
+  labs(x = "Watershed Area (km²)", 
+       y = "Water temperature (°C)",
+       title = "Observation site watershed area by water temperature")
+
+
+

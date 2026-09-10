@@ -1,0 +1,6 @@
+"0","# ggsave(plot = network_map, width = 6.5, height = 4.5, units = ""in"","
+"0","#        dpi = 600, filename = ""../figures/fig1_optionB_studymap.png"")"
+"0","# "
+"0","# ggsave(plot = network_map, width = 6.5, height = 4.5, units = ""in"","
+"0","#        device = cairo_ps,"
+"0","#        dpi = 600, filename = ""../figures/fig1_studymap.eps"")"

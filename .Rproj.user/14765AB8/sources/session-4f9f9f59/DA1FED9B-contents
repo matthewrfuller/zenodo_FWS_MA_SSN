@@ -1,0 +1,95 @@
+---
+title: "Observation data extraction"
+author: "Matt Fuller"
+date: "2023-11-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(sf)
+library(terra)
+library(glue)
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Read in the site data from the ssn object.  
+```{r}
+# station data with lat-long coordinates as decimal degrees in WGS84. lat-long
+# column names need to be "longitude" and "latitude"
+obs_stn <- st_read(dsn = "../data/input/shp/sites.shp")
+
+# create new object for observation data that has no geometry
+x <- st_drop_geometry(obs_stn)
+```
+
+
+List the daymet tif files gathered from the fetch script.  
+```{r}
+# list of tif files for each param and year from 'daymet_dir' in project
+daymet_files <- 
+  list.files(path = "../data/daymet", full.names = TRUE, pattern = ".tif$")
+```
+
+
+Get just the coordinates for each site and convert to a matrix data type.  
+```{r}
+latlon <- x[, c("ssnid","longitude", "latitude")]
+xy <- as.matrix(latlon[ ,c("longitude", "latitude")])
+```
+
+
+Add a column (id) from the rownames so that it can be joined to 'ssnid'.  
+```{r}
+xyssnid <- latlon |> rownames_to_column(var = "id") |> select(ssnid, id)
+```
+
+
+Convert xy matrix into spatial vector of point coordinates.  
+```{r}
+p <- terra::vect(xy, crs="+proj=longlat +datum=WGS84")
+```
+
+
+Get the time series for each site (id) for all params in long format and use a join to label with the ssnid for the point/site.  
+```{r}
+y <- map_df(daymet_files, function (filename) {
+  r <- terra::rast(filename)
+  x <- terra::extract(r, terra::project(p, terra::crs(r)), ID = TRUE, bind = TRUE)
+  as.data.frame(x) |>
+    mutate(id = as.character(row_number())) |>
+    left_join(y = xyssnid, by = "id") |>
+    pivot_longer(-contains("id"), names_sep = "_", names_to = c("param", "year", "jday")) |>
+    mutate(date = ymd(str_c(year, "0101")) + days(as.numeric(jday) - 1) ) |>
+    select(ssnid, date, param, value)
+})
+
+```
+
+Extract temperature statistics by year and ssnid.  
+```{r}
+obs_daymet_stn <- y |>
+  pivot_wider(names_from = "param") |> 
+  group_by(ssnid) |>
+  # must compute this rolling average before filtering to month of interest
+  mutate(t7dm = zoo::rollapply(tmax, 7, mean, fill = NA, align = "right")) |> 
+  ungroup() |>
+  mutate(smpl_year = year(date), smpl_mon = month(date) )  |>
+  filter(smpl_mon == 7)  |>
+  rowwise() |> mutate(tavg = mean(c(tmin, tmax))) |> ungroup()  |>
+  group_by(ssnid, smpl_year)  |>
+  reframe(d07_prcp = sum(prcp),                # total monthly precipitation
+          d07_tavg = mean(tavg, na.rm = TRUE), # mean daily mean air temp for month
+          d07_tmin = mean(tmin, na.rm = TRUE), # mean daily min air temp for month
+          d07_tmax = mean(tmax, na.rm = TRUE), # mean daily max air temp for month
+          d07_7ddm = max(t7dm, na.rm = TRUE),  # maximum 7DADM of air temp for month
+          d07_1ddm = max(tmax, na.rm = TRUE))  # maximum daily max air temp for month
+```
+
+Save observation site daymet data to file for joining to ssn object data later.  
+```{r}
+write_csv(obs_daymet_stn, file = "../data/output/daymet_obs.csv")
+```
+
