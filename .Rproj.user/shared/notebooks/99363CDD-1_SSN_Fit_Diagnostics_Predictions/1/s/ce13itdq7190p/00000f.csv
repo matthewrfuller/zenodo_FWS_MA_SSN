@@ -1,6 +1,0 @@
-"0","# Compute the Torgegram"
-"0","tg <- Torgegram(formula = WT_avg ~ sAreaKm2 + sdJLtavg + sBFIc + sCPY100x + "
-"0","                  sv2elevm + sNIDDENw,"
-"0","                ssn.object = ssn_obj)"
-"0","# Plot it"
-"0","plot(tg)"

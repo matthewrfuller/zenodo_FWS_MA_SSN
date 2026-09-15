@@ -1,6 +1,0 @@
-"0","(fig1_panel <- "
-"0","  cowplot::plot_grid(network_map,elevation_map,"
-"0","                     labels = c(""A "",""B ""),"
-"0","                     nrow = 2) + "
-"0","  theme(plot.background = element_rect(fill = ""white"",color = NA))"
-"0"," )"

@@ -1,2 +1,0 @@
-"0",""
-"0","write_csv(esttab_cooling_df, file = ""../tables/estimate_table.csv"")"

@@ -1,6 +1,0 @@
-"0","# observation and prediction site geospatial data "
-"0","obs_df <- readRDS(""../data/obs_df_MA_SSN.RDS"")"
-"0","preds_df <- readRDS(""../data/preds_df_MA_SSN.RDS"")"
-"0",""
-"0","# geospatial river network lines"
-"0","ma_edges<- readRDS(file = ""../data/ssnobj_edges.RDS"")"

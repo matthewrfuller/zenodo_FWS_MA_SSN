@@ -1,4 +1,0 @@
-"0",""
-"0","ggsave(plot = recent_scenario_maps, "
-"0","       filename = ""../figures/FigureS7_temp_maps_recent_climate.png"","
-"0","       width = 13, height = 10, dpi = 600, units = ""in"")"

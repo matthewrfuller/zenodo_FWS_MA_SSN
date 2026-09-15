@@ -1,7 +1,7 @@
 ---
-title: "MA SSN manuscript figures"
+title: "Part 3: Manuscript figures"
 author: "Matt Fuller"
-date: "`r Sys.Date()`"
+date: "2026-09-09"
 output:
   html_document:
     toc: true
@@ -70,7 +70,7 @@ obs_df <- readRDS("../data/obs_df_MA_SSN.RDS")
 preds_df <- readRDS("../data/preds_df_MA_SSN.RDS")
 
 # geospatial river network lines
-ma_edges<- readRDS(file = "../data/ssnobj_edges.RDS")
+ma_edges<- readRDS(file = "../data/ssn_obj_edges.RDS")
 ```
 
 
@@ -156,6 +156,12 @@ ma_streams_sf <-
                            by = c("rid")),
                crs = 3857)
 
+# save all prediction data as geopackage and .csv files for others
+st_write(obj = ma_streams_sf, quiet = TRUE, delete_dsn = TRUE,
+         dsn = "../predictions/MA_streams_joined_to_scenario_predictions.gpkg")
+write_csv(x = ma_streams_sf, 
+          file = "../predictions/MA_streams_joined_to_scenario_predictions.csv")
+
 # create map extents using 7.5km buffer around streams of MA
 map_bbox_buffer <- 7500
 map_extent <- 
@@ -189,7 +195,6 @@ NA_map_ggplot <- ggplot() +
                fill = "red", color = "red", linewidth = 0.1) +
   geom_polygon(data = usa, aes(x = long, y = lat, group = group), 
                fill = NA, color = "grey20", linewidth = 0.25) +
-  # annotation_scale(location = "tl", style = "ticks", text_family = "sans")  +
   coord_sf(crs = 3857) +
   theme_void()
 # NA_map_ggplot
@@ -259,7 +264,6 @@ ne_inset <- ggplot() +
   geom_sf(data = ne_map, fill = "white", color = "black", linewidth = 0.1) +
   geom_sf(data = ma_boundary, fill = "red") +
   theme_void() +
-  # theme(panel.border = element_rect(color = "black", fill = NA, linewidth = 1))
   theme(panel.border = element_blank())
 ```
 
@@ -302,7 +306,6 @@ main_map_network <- ggplot() +
   annotation_scale(
     location = "tr",       # Bottom left location
     bar_cols = c("black", "white"),
-    # text_family = "Arial",
     width_hint = 0.18,      # Relative width of the scale bar (30% of map width)
     pad_y = unit(3, "cm")
   ) +
@@ -316,9 +319,9 @@ main_map_network <- ggplot() +
         legend.position = "none") 
 
 # Final map with insets
-(network_map <- ggdraw(main_map_network) +
+network_map <- ggdraw(main_map_network) +
     draw_plot(NA_map_ggplot, x = 0.02, y = 0.02, width = 0.3, height = 0.4) +
-    draw_plot(ne_inset, x = 0.25, y = 0.05, width = 0.35, height = 0.4)  )
+    draw_plot(ne_inset, x = 0.25, y = 0.05, width = 0.35, height = 0.4)  
 ```
 
 ```{r}
@@ -337,7 +340,7 @@ main_map_network <- ggplot() +
 
 ```{r fig.height=4.5, fig.width=6.5, warning = FALSE}
 # Create the main map of Massachusetts with a Cividis discrete color palette
-main_map_cividis <- ggplot() +
+elevation_map <- ggplot() +
   # Add the DEM raster layer using the discrete 'elevation_band'
   geom_raster(data = ma_dem_df, 
               aes(x = x, y = y, fill = band_index)) +
@@ -368,16 +371,6 @@ main_map_cividis <- ggplot() +
     )
   ) +
   
-  
-  # Add major contour lines
-  # geom_sf(data = major_contours_sf, color = "black", linewidth = 0.5) +
-  
-  # Add minor contour lines
-  # geom_sf(data = minor_contours_sf, color = "black", linetype = "dashed", linewidth = 0.25) +
-  
-  # Add the state boundary
-  # geom_sf(data = ma_boundary, fill = NA, color = "black", linewidth = 1) +
-  
   # Add North Arrow
   annotation_north_arrow(
     location = "tr",       # Top right location
@@ -400,11 +393,7 @@ main_map_cividis <- ggplot() +
   coord_sf(crs = st_crs(ma_boundary)) +
   
   # Add titles and labels
-  labs(
-    # title = "Topographic Map of Massachusetts (Cividis Palette)",
-    # subtitle = "Contour lines at 100m intervals (solid) and 50m intervals (dashed)",
-    fill = "Elevation Band (m)" # Update the legend title
-  ) +
+  labs(fill = "Elevation Band (m)") +  # Update the legend title
   theme_void() +
   theme(plot.background = element_rect(fill = "white"),
         legend.position = "inside",
@@ -413,41 +402,34 @@ main_map_cividis <- ggplot() +
         legend.title = element_text(margin = margin(b = 4)),
         legend.text  = element_text(size = 8, angle = 45, hjust = 0.75)
   )
-
-(elevation_map <-main_map_cividis)
-
-# Final map with insets
-# (elevation_map <- ggdraw(main_map_cividis) )+
-#   draw_plot(NA_map_ggplot, x = 0.02, y = 0.02, width = 0.3, height = 0.4) +
-#   draw_plot(ne_inset, x = 0.25, y = 0.05, width = 0.35, height = 0.4)  )
 ```
 
-## Fig 1 Panel  
+## Figure 1. Panel Plot  
 
 ```{r fig.height=9, fig.width=6.5, warning = FALSE}
-(fig1_panel <- 
-  cowplot::plot_grid(network_map,elevation_map,
+(fig1_panel <-
+  cowplot::plot_grid(network_map, elevation_map,
                      labels = c("A ","B "),
-                     nrow = 2) + 
+                     nrow = 2) +
   theme(plot.background = element_rect(fill = "white",color = NA))
  )
 ```
 
 
 ```{r}
-ggsave(plot = fig1_panel, width = 6.5, height = 9, units = "in",
-       dpi = 600, filename = "../figures/Figure1_studyarea_and_dem.png")
-
-ggsave(plot = fig1_panel, width = 6.5, height = 9, units = "in",
-       device = cairo_ps,
-       dpi = 600, filename = "../figures/Figure1_studyarea_and_dem.eps")
+# ggsave(plot = fig1_panel, width = 6.5, height = 9, units = "in",
+#        dpi = 600, filename = "../figures/Figure1_studyarea_and_dem.png")
+# 
+# ggsave(plot = fig1_panel, width = 6.5, height = 9, units = "in",
+#        device = cairo_ps,
+#        dpi = 600, filename = "../figures/Figure1_studyarea_and_dem.eps")
 ```
 
 
 
 <br>  
 
-# Linked Micromaps  
+# Figures 2 & 4: Linked Micromaps  
 
 ## Micromap function modifications for FWS style formatting  
 
@@ -1443,14 +1425,7 @@ print.mm2 <- function(x, name = NULL, res = 600,
   #   }
   # )
   
-  # MRF added
-  # for (p in 1:(length(plobject) - 3)) {
-  #   invisible(utils::capture.output({
-  #     suppressWarnings(
-  #       print(plobject[[p]], vp = subplot(1, p * 2))
-  #     )
-  #   }))
-  # }
+  # MRF added to replace above
   for (p in 1:(length(plobject) - 3)) {
     suppressWarnings(
       print(plobject[[p]], vp = subplot(1, p * 2), newpage = FALSE)
@@ -1498,7 +1473,6 @@ print.mm2 <- function(x, name = NULL, res = 600,
 # Define band breaks and labels
 band_breaks <- elevation_breaks
 band_labels <- elevation_labels
-# band_cols <- viridisLite::viridis(n_bands, option = "C")  # or viridis::viridis
 
 # Assign band to each stream segment; clamp to [0,800]
 streams_banded <- ma_streams_sf |> 
@@ -1528,10 +1502,7 @@ map_table <- create_map_table(sf::as_Spatial(streams_poly),
 ```
 
 
-## Micromap Plots  
-
-
-### Fig 2. Temperature boxplot micromap  
+## Figure 2. Temperature boxplot micromap  
 
 
 ```{r}
@@ -1596,18 +1567,7 @@ stat_df <- band_counts |>
                            n_segments, total_km),
          label_parse = sprintf("atop('%s m a.s.l.', '\n(' * italic(n) * ' = %d, %.1f km)')",
                                gsub("-", "\u2013", elev_band), n_segments, total_km)
-         # label_parse = if_else(
-         #   elev_band == ">600",
-         #   sprintf("greaterthan(600) * ' m a.s.l.' * '\n(' * italic(n) * ' = %d, %.1f km)'",
-         #           n_segments, total_km),
-         #   sprintf("'%s m a.s.l.' * '\n(' * italic(n) * ' = %d, %.1f km)'",
-         #           gsub("-", "\u2013", elev_band), n_segments, total_km)
   )
-# ~sub("-", "\u2013", .x)  # replace dash with en-dash
-
-
-# Check actual names present
-# names(stat_df)
 
 # Boxplot formatting options
 boxplot_width <- 0.75
@@ -1677,14 +1637,12 @@ micromap_box_grouped <-
     ),
     grp.by      = "band_id",           # 
     cat         = "Climate",
-    # median.row  = FALSE,               # keep map aspect ratio (vignette warns median row can distort maps)
     map.link    = c("band_id", "ID"),  # stat column <-> map_table ID
     map.all     = TRUE,                # show entire network; active band highlighted by color
     colors      = c("white","grey60"),
     plot.footer = "Mean July stream reach temperature (\u00B0C)",
     plot.width = 11,
     plot.height = 8, 
-    # plot.panel.margins = c(10,5,15,5),
     footer.grid.unit.y.adj = 0.025, 
     footer.grid.viewport.height = 0.985,
     footer.grid.viewport.y = 0.5,
@@ -1733,36 +1691,36 @@ micromap_box_grouped <-
 
 
 ```{r warning=FALSE, message=FALSE, results='hide'}
-# PNG figure file
-print.mm2(micromap_box_grouped, res = 1200, footer.grid.unit.y.adj = 0.025, 
-                      footer.grid.viewport.height = 0.985,
-                      footer.grid.viewport.y = 0.5,
-          name = "../figures/Figure2_boxplot_temps_micromap.png")
-
-# PDF figure file
-print.mm2(micromap_box_grouped, res = 1200, footer.grid.unit.y.adj = 0.025, 
-                      footer.grid.viewport.height = 0.985,
-                      footer.grid.viewport.y = 0.5,
-          name = "../figures/Figure2_boxplot_temps_micromap.pdf")
+# # PNG figure file
+# print.mm2(micromap_box_grouped, res = 1200, footer.grid.unit.y.adj = 0.025, 
+#                       footer.grid.viewport.height = 0.985,
+#                       footer.grid.viewport.y = 0.5,
+#           name = "../figures/Figure2_boxplot_temps_micromap.png")
+# 
+# # PDF figure file
+# print.mm2(micromap_box_grouped, res = 1200, footer.grid.unit.y.adj = 0.025, 
+#                       footer.grid.viewport.height = 0.985,
+#                       footer.grid.viewport.y = 0.5,
+#           name = "../figures/Figure2_boxplot_temps_micromap.pdf")
 ```
 
 ```{r}
-grDevices::cairo_ps(
-  filename = "../figures/Figure2_boxplot_temps_micromap.eps",
-  width = 11,
-  height = 8,
-  onefile = FALSE,
-  family = "sans"
-)
-
-micromap_box_grouped
-
-dev.off()
+# # eps figure file
+# grDevices::cairo_ps(
+#   filename = "../figures/Figure2_boxplot_temps_micromap.eps",
+#   width = 11,
+#   height = 8,
+#   onefile = FALSE,
+#   family = "sans"
+# )
+# 
+# micromap_box_grouped
+# 
+# dev.off()
 ```
 
 
-
-### Fig 4. Cold-water habitat barplot micromap  
+## Figure 4. Cold-water habitat barplot micromap  
 
 ```{r}
 # --- Inputs ---
@@ -1895,8 +1853,6 @@ stat_df_grouped <- stat_df_prop %>%
   mutate(band_id = forcats::fct_rev(band_id)) |>
   arrange(band_id, Climate) |>
   data.frame()
-
-# str(stat_df_grouped)
 ```
 
 
@@ -1919,7 +1875,6 @@ micromap_bar_grouped <- mmgroupedplot2(
   map.all     = TRUE,
   colors = c("white", "grey60"),
   plot.footer = "Percent of reach length as coldwater habitat (%)",
-  # plot.panel.margins = c(2,0,1,0),
   plot.grp.spacing = 2,
   plot.height = 8,
   plot.width  = 11,
@@ -1975,36 +1930,36 @@ micromap_bar_grouped <- mmgroupedplot2(
 
 
 ```{r warning=FALSE, message=FALSE, results='hide'}
-print.mm2(micromap_bar_grouped,  res = 1200, footer.grid.unit.y.adj = 0.02, 
-                      footer.grid.viewport.height = 0.97,
-                      footer.grid.viewport.y = 0.51,
-          name = "../figures/Figure4_barplot_CWH_micromap.png")
-print.mm2(micromap_bar_grouped,  res = 1200, footer.grid.unit.y.adj = 0.0185, 
-                      footer.grid.viewport.height = 0.97,
-                      footer.grid.viewport.y = 0.51,
-          name = "../figures/Figure4_barplot_CWH_micromap.pdf")
+# print.mm2(micromap_bar_grouped,  res = 1200, footer.grid.unit.y.adj = 0.02, 
+#                       footer.grid.viewport.height = 0.97,
+#                       footer.grid.viewport.y = 0.51,
+#           name = "../figures/Figure4_barplot_CWH_micromap.png")
+# 
+# print.mm2(micromap_bar_grouped,  res = 1200, footer.grid.unit.y.adj = 0.0185, 
+#                       footer.grid.viewport.height = 0.97,
+#                       footer.grid.viewport.y = 0.51,
+#           name = "../figures/Figure4_barplot_CWH_micromap.pdf")
 ```
 
 ```{r}
-grDevices::cairo_ps(
-  filename = "../figures/Figure4_barplot_CWH_micromap.eps",
-  width = 11,
-  height = 8,
-  onefile = FALSE,
-  family = "sans"
-)
-
-micromap_bar_grouped
-
-dev.off()
+# grDevices::cairo_ps(
+#   filename = "../figures/Figure4_barplot_CWH_micromap.eps",
+#   width = 11,
+#   height = 8,
+#   onefile = FALSE,
+#   family = "sans"
+# )
+# 
+# micromap_bar_grouped
+# 
+# dev.off()
 ```
 
 <br>  
 
 
-# Cold-water habitat by elevation  
 
-## Table 3. State-wide statistics  
+# Table 3. Cold-water habitat by elevation - statewide statistics  
 
 What is the mean elevation of the cold-water habitat across the state?  
 
@@ -2059,7 +2014,7 @@ temp_thshld20c_MA_summary_df <-
          "Reach length (km)"="reach_km")
 
 write_csv(temp_thshld20c_MA_summary_df,
-          file = "../tables/table3_coldwaterhabt_count_length_elev_stats.csv")
+          file = "../tables/Table3_coldwaterhabt_count_length_elev_stats.csv")
 
 # use knitr table for PDF output
 # knitr::kable(temp_thshld20c_MA_summary_df)
@@ -2072,7 +2027,7 @@ DT::datatable(temp_thshld20c_MA_summary_df, rownames = FALSE,
 
 
 
-## Fig 3. Density distributions of cold water habitat  
+# Figure 3. Density distributions of cold water habitat  
 
 The ridgeline plot compares density distributions of the MA reaches that meet the 20C threshold among scenarios as well as with the density distribution of reaches for all networks in MA. The mean reach length (km) among the MA networks is: `r round(mean(filter(augm_rcnt,!is.na(.fitted))$Shape_Leng)/1000,3)` km with a median of: `r round(median(filter(augm_rcnt,!is.na(.fitted))$Shape_Leng)/1000,3)`. So, there is roughly a 1km reach length across the modeling networks used in this analysis.
 
@@ -2151,9 +2106,6 @@ scenario_20C_reaches_by_elevation_ridgesplot <-
   scale_x_continuous(breaks = seq(0, 700, 100), limits = c(0,725)) +
   coord_cartesian(xlim = c(0,725)) +
   labs(x = "Elevation (m)",
-       # title = "Density ridgelines for reaches \u2264 20\u00B0C",
-       # caption = paste0("Dashed ridgeline represents density distribution of ",
-       #                  "all reaches across MA"), 
        y = "Density distributions of stream reaches by scenario")
 scenario_20C_reaches_by_elevation_ridgesplot
 ```
@@ -2161,18 +2113,18 @@ scenario_20C_reaches_by_elevation_ridgesplot
 
 
 ```{r message=FALSE, warning=FALSE}
-ggsave(plot = scenario_20C_reaches_by_elevation_ridgesplot,
-       filename = "../figures/Figure3_coldwaterhabitat_ridgelineplot.png",
-       width = 6.5,height = 5, dpi = 600, units = "in")
-
-ggsave(plot = scenario_20C_reaches_by_elevation_ridgesplot,
-       filename = "../figures/Figure3_coldwaterhabitat_ridgelineplot.eps",
-       device = cairo_ps,
-       width = 6.5,height = 5, dpi = 600, units = "in")
+# ggsave(plot = scenario_20C_reaches_by_elevation_ridgesplot,
+#        filename = "../figures/Figure3_coldwaterhabitat_ridgelineplot.png",
+#        width = 6.5,height = 5, dpi = 600, units = "in")
+# 
+# ggsave(plot = scenario_20C_reaches_by_elevation_ridgesplot,
+#        filename = "../figures/Figure3_coldwaterhabitat_ridgelineplot.eps",
+#        device = cairo_ps,
+#        width = 6.5,height = 5, dpi = 600, units = "in")
 ```
 
 
-
+# Figure 5 
 
 ##  Fig 5A. Recent climate cold water habitat availability 
 
@@ -2205,35 +2157,21 @@ site_prop_rcnt_df <- elev_band_00rcnt |>
 
 
 ```{r message=FALSE, warning=FALSE}
-(siteprop_rcnt_plot_kmonly <-
-   ggplot(data = filter(site_prop_rcnt_df, prop_type == "siteprop_km_tot"), 
-          aes(x = elev_band_mid, y = proportion) ) +
-   # geom_hline(yintercept = 0, linetype = "dashed", color = "grey50") +
-   # geom_hline(yintercept = 1, linetype = "dashed", color = "grey50") +
-   
-   geom_smooth(color = "grey50", se = FALSE, 
-               
-               method = 'loess', formula = "y ~ x + 0", span = 0.9,
-               # method = 'lm', formula = y ~ 0 + x + I(x^2),
-               # method = "nls", 
-               # formula = y ~ 1 * (1 - ((x - xp) / xp)^2), 
-               # method.args = list(start = list(xp = 700)), # 'xp' is your guess for the peak's x-location
-               
-               linewidth = 1) +
-   
-   geom_point(color = "black", shape = 16, size = 2) +
-   
-   theme_classic() +
-   scale_x_continuous(breaks = seq(0, 700, 100)) +
-   coord_cartesian(xlim = c(0,725)) +
-   scale_y_continuous(limits = c(0,1)) + 
-   theme(plot.margin = margin(t = 30, r = 5, b = 5, l = 5)) + 
-   labs(x = "",
-        # x = "Reach elevation (m)", 
-        # title = "Recent climate habitat meeting 20\u00B0C threshold across all MA reaches",
-        y = "Proportion of coldwater reach length"
-        ) 
- )
+siteprop_rcnt_plot_kmonly <-
+  ggplot(data = filter(site_prop_rcnt_df, prop_type == "siteprop_km_tot"), 
+         aes(x = elev_band_mid, y = proportion) ) +
+  geom_smooth(color = "grey50", se = FALSE, 
+              method = 'loess', formula = "y ~ x + 0", span = 0.9,
+              linewidth = 1) +
+  geom_point(color = "black", shape = 16, size = 2) +
+  theme_classic() +
+  scale_x_continuous(breaks = seq(0, 700, 100)) +
+  coord_cartesian(xlim = c(0,725)) +
+  scale_y_continuous(limits = c(0,1)) + 
+  theme(plot.margin = margin(t = 30, r = 5, b = 5, l = 5)) + 
+  labs(x = "",
+       y = "Proportion of coldwater reach length"
+  ) 
 ```
 
 
@@ -2265,65 +2203,60 @@ labels_for_figs <- c(futr =          "Future",
                      rcntshade =     "Recent + shade", 
                      rcntdamshade =  "Recent + dam + shade")
 
-(siteprop_comboclimrest_plot <- 
-    ggplot() + geom_hline(yintercept = 0, color = "grey50", linewidth = 0.75) +
-    
-    geom_smooth(data = filter(siteprop_comboclimrest_df, 
-                              Scenario %in% c("rcntdam","rcntshade","rcntdamshade",
-                                              "futr",
-                                              "futrdam","futrshade","futrdamshade")),
-                se = FALSE, level = 0.95, method = "loess", formula = 'y~x',
-                aes(x = elev_band_mid, 
-                    color = Scenario, 
-                    fill = Scenario,
-                    linetype = Scenario,
-                    linewidth = Scenario,
-                    y = siteprop_n) ) +
-    
-    theme_classic() +
-    scale_linetype_manual(name = "Scenario", 
-                          values = c("dashed","dotdash","dotdash","solid",
-                                     "dotted","dotted","dotted"),
-                          labels = labels_for_figs) +
-    scale_linewidth_manual(name = "Scenario", 
-                           values = c(1,1,1,1.5,1,1,1),
-                           labels = labels_for_figs) +
-    scale_color_manual(name = "Scenario", 
-                       values = c('#b35806','#f1a340','#fee0b6','black',
-                                  '#d8daeb','#998ec3','#542788'),
-                       labels = labels_for_figs) +
-    scale_fill_manual(name = "Scenario", 
-                      values = c('#b35806','#f1a340','#fee0b6','black',
-                                 '#d8daeb','#998ec3','#542788'),
-                      labels = labels_for_figs) +
-    scale_y_continuous(breaks = seq(-1, 2, 1), 
-                       labels = ~sub("-", "\u2212", .x)) +
-    scale_x_continuous(breaks = seq(0, 700, 100)) +
-    coord_cartesian(ylim = c(-1, 2), xlim = c(0,725)) +
-    theme(legend.position = c(0.6,0.8), 
-          plot.title = element_markdown(),    # used for double line subtitle
-          plot.subtitle = element_markdown(), # used for double line subtitle
-          legend.background = element_blank(),
-          legend.key = element_blank(), 
-          legend.key.width = unit(0.5,"in"),  # increase width of legend keys
-          legend.direction = "horizontal", 
-          legend.text.align = 0) +
-    guides(color = guide_legend(nrow = 4), 
-           fill = guide_legend(nrow = 4),
-           linetype = guide_legend(nrow = 4),
-           linewidth = guide_legend(nrow = 4)) +
-    labs(x = "Reach elevation (m)",
-         # title = paste0("Proportion of reach length meeting 20\u00B0C threshold ",
-         #                "(Recent as baseline)"),
-         # subtitle = paste0('Scenarios: Warming (+2\u00B0C air temp.); Dam (\u22121 ',
-         #                   'dam per 10km\u00b2); Shade (+10% shade)'),
-         y = "Proportion of coldwater habitat\n(reach length gained [+] or lost [-])"
-         ) 
-)
+siteprop_comboclimrest_plot <- 
+  ggplot() + geom_hline(yintercept = 0, color = "grey50", linewidth = 0.75) +
+  
+  geom_smooth(data = filter(siteprop_comboclimrest_df, 
+                            Scenario %in% c("rcntdam","rcntshade","rcntdamshade",
+                                            "futr",
+                                            "futrdam","futrshade","futrdamshade")),
+              se = FALSE, level = 0.95, method = "loess", formula = 'y~x',
+              aes(x = elev_band_mid, 
+                  color = Scenario, 
+                  fill = Scenario,
+                  linetype = Scenario,
+                  linewidth = Scenario,
+                  y = siteprop_n) ) +
+  
+  theme_classic() +
+  scale_linetype_manual(name = "Scenario", 
+                        values = c("dashed","dotdash","dotdash","solid",
+                                   "dotted","dotted","dotted"),
+                        labels = labels_for_figs) +
+  scale_linewidth_manual(name = "Scenario", 
+                         values = c(1,1,1,1.5,1,1,1),
+                         labels = labels_for_figs) +
+  scale_color_manual(name = "Scenario", 
+                     values = c('#b35806','#f1a340','#fee0b6','black',
+                                '#d8daeb','#998ec3','#542788'),
+                     labels = labels_for_figs) +
+  scale_fill_manual(name = "Scenario", 
+                    values = c('#b35806','#f1a340','#fee0b6','black',
+                               '#d8daeb','#998ec3','#542788'),
+                    labels = labels_for_figs) +
+  scale_y_continuous(breaks = seq(-1, 2, 1), 
+                     labels = ~sub("-", "\u2212", .x)) +
+  scale_x_continuous(breaks = seq(0, 700, 100)) +
+  coord_cartesian(ylim = c(-1, 2), xlim = c(0,725)) +
+  theme(legend.position = c(0.6,0.8), 
+        plot.title = element_markdown(),    # used for double line subtitle
+        plot.subtitle = element_markdown(), # used for double line subtitle
+        legend.background = element_blank(),
+        legend.key = element_blank(), 
+        legend.key.width = unit(0.5,"in"),  # increase width of legend keys
+        legend.direction = "horizontal", 
+        legend.text.align = 0) +
+  guides(color = guide_legend(nrow = 4), 
+         fill = guide_legend(nrow = 4),
+         linetype = guide_legend(nrow = 4),
+         linewidth = guide_legend(nrow = 4)) +
+  labs(x = "Reach elevation (m)",
+       y = "Proportion of coldwater habitat\n(reach length gained [+] or lost [-])"
+  ) 
 ```
 
 
-## Figure 5 Panel Plot  
+## Figure 5. Panel Plot  
 
 
 ```{r fig.width = 6.5, fig.height=7.5, warning=FALSE}
@@ -2343,16 +2276,16 @@ figure_5_panel_plot
 
 
 ```{r}
-ggsave(plot = figure_6_panel_plot,
-       filename = paste0("../figures/",
-                         "Figure5_coldwaterhabitat_proportions.png"),
-       width = 6.5, height = 7.5, units = "in", dpi = 600)
-
-ggsave(plot = figure_6_panel_plot,
-       filename = paste0("../figures/",
-                         "Figure5_coldwaterhabitat_proportions.eps"),
-       device = cairo_ps,
-       width = 6.5, height = 7.5, units = "in", dpi = 600)
+# ggsave(plot = figure_5_panel_plot,
+#        filename = paste0("../figures/",
+#                          "Figure5_coldwaterhabitat_proportions.png"),
+#        width = 6.5, height = 7.5, units = "in", dpi = 600)
+# 
+# ggsave(plot = figure_5_panel_plot,
+#        filename = paste0("../figures/",
+#                          "Figure5_coldwaterhabitat_proportions.eps"),
+#        device = cairo_ps,
+#        width = 6.5, height = 7.5, units = "in", dpi = 600)
 ```
 
 
@@ -2360,7 +2293,7 @@ ggsave(plot = figure_6_panel_plot,
 
 
 
-##  Fig S1. CWH by elevation threshhold comparison  
+##  Figure S1. CWH by elevation threshhold comparison  
 
 
 ```{r}
@@ -2437,8 +2370,6 @@ site_prop_rcnt20_df <- elev_band_00rcnt20 |>
                names_to = "prop_type", values_to = "proportion") |>
   filter(!is.na(n_sites_tot))
 
-
-
 site_prop_rcnt181920_df <- bind_rows(
   mutate(site_prop_rcnt18_df, t_thresh = factor("18", levels = c("18","19","20"))),
   mutate(site_prop_rcnt19_df, t_thresh = factor("19", levels = c("18","19","20"))),
@@ -2448,7 +2379,7 @@ site_prop_rcnt181920_df <- bind_rows(
 
 
 
-```{r warning = FALSE, message = FALSE}
+```{r fig.width = 6.5, fig.height = 4, warning = FALSE, message = FALSE}
 (siteprop_rcnt_plot_temp_threshold <-
    ggplot(data = filter(site_prop_rcnt181920_df, prop_type == "siteprop_km_tot"), 
           aes(x = elev_band_mid, y = proportion, 
@@ -2479,16 +2410,16 @@ site_prop_rcnt181920_df <- bind_rows(
         shape = "Temperature threshold (\u00B0C)",
         y = "Proportion of reach length") )
 
-ggsave(plot = siteprop_rcnt_plot_temp_threshold, width = 6.5, height = 4, units = "in", dpi = 600,
-       filename = "../figures/FigureS1_coldwaterhabitat_available_in_recent_climate_thresholdcomparison.png")
-
+# ggsave(plot = siteprop_rcnt_plot_temp_threshold, width = 6.5, height = 4, units = "in", dpi = 600,
+#        filename = "../figures/FigureS1_coldwaterhabitat_available_in_recent_climate_thresholdcomparison.png")
+# 
 # ggsave(plot = siteprop_rcnt_plot_temp_threshold, width = 6.5, height = 4, units = "in", dpi = 600,
 #        device = cairo_ps,
 #        filename = "../figures/FigureS1_coldwaterhabitat_available_in_recent_climate_thresholdcomparison.eps")
 ```
 
 
-## Fig S2. Density distributions of cold water habitat  
+## Figure S2. Density distributions of cold water habitat  
 
 The ridgeline plot compares density distributions of the MA reaches that meet the 20C threshold among scenarios as well as with the density distribution of reaches for all networks in MA. The mean reach length (km) among the MA networks is: `r round(mean(filter(augm_rcnt,!is.na(.fitted))$Shape_Leng)/1000,3)` km with a median of: `r round(median(filter(augm_rcnt,!is.na(.fitted))$Shape_Leng)/1000,3)`. So, there is roughly a 1km reach length across the modeling networks used in this analysis.
 
@@ -2523,8 +2454,6 @@ scenario_18C_reaches_by_elevation_ridgesplot <-
                    ) +
   labs(x = "Elevation (m)",
        title = "Reaches \u2264 18\u00B0C",
-       # caption = paste0("Dashed ridgeline represents density distribution of ",
-       #                  "all reaches across MA"), 
        y = "Density distributions of stream reaches by scenario\n")
 ```
 
@@ -2560,8 +2489,6 @@ scenario_19C_reaches_by_elevation_ridgesplot <-
                    ) +
   labs(x = "Elevation (m)",
        title = "Reaches \u2264 19\u00B0C",
-       # caption = paste0("Dashed ridgeline represents density distribution of ",
-       #                  "all reaches across MA"), 
        y = "Density distributions of stream reaches by scenario\n")
 ```
 
@@ -2598,8 +2525,6 @@ scenario_20C_reaches_by_elevation_ridgesplot <-
                    ) +
   labs(x = "Elevation (m)",
        title = "Reaches \u2264 20\u00B0C",
-       # caption = paste0("Dashed ridgeline represents density distribution of ",
-       #                  "all reaches across MA"), 
        y = "Density distributions of stream reaches by scenario\n")
 ```
 
@@ -2637,10 +2562,10 @@ coldwaterhabitat_ridgelineplot_threshold_sensitivity
 ```
 
 ```{r}
-ggsave(plot = coldwaterhabitat_ridgelineplot_threshold_sensitivity,
-       filename = "../figures/FigureS2_coldwaterhabitat_ridgelineplot_thresholdsensitivity.png",
-       width = 10, height = 7, dpi = 600, units = "in")
-
+# ggsave(plot = coldwaterhabitat_ridgelineplot_threshold_sensitivity,
+#        filename = "../figures/FigureS2_coldwaterhabitat_ridgelineplot_thresholdsensitivity.png",
+#        width = 10, height = 7, dpi = 600, units = "in")
+# 
 # ggsave(plot = coldwaterhabitat_ridgelineplot_threshold_sensitivity,
 #        filename = "../figures/FigureS2_coldwaterhabitat_ridgelineplot_thresholdsensitivity.eps",
 #        device = cairo_ps,
@@ -2651,7 +2576,7 @@ ggsave(plot = coldwaterhabitat_ridgelineplot_threshold_sensitivity,
 
 
 
-## Fig S3. Reach length comparison among all scenarios  
+## Figure S3. Reach length comparison among all scenarios  
 
 
 ```{r}
@@ -2792,7 +2717,6 @@ siteprop18_comboclimrest_plot <-
    theme(plot.title = element_markdown(),    # used for double line subtitle
          axis.title.x = element_blank(),
          legend.position = "none", 
-         #legend.position = c(0.65,0.75), 
          plot.margin = margin(5.5, 5.5, 5.5, 5.5),
          legend.background = element_blank(),
          legend.key = element_blank(), 
@@ -2808,15 +2732,8 @@ siteprop18_comboclimrest_plot <-
    ) +
    labs(x = "Reach elevation (m)",
         title = "18\u00B0C threshold",
-        # subtitle = paste0('Scenarios: Warming (+2\u00B0C air temp.); Dam (-1 ',
-        #                   'dam per 10km\u00b2); Shade (+10% shade)'),
         y = "Proportion of coldwater habitat\n(reach length gained [+] or lost [-])") 
 # siteprop18_comboclimrest_plot
-
-# ggsave(plot = siteprop18_comboclimrest_plot,
-#        filename = paste0("../figures/",
-#                          "FigureS3A_coldwaterhabitat_propreachkm_allscenariocurves_18C.png"),
-#        width = 6.5, height = 3.5, units = "in", dpi = 600)
 ```
 
 
@@ -2858,7 +2775,6 @@ siteprop19_comboclimrest_plot <-
    theme(plot.title = element_markdown(),    # used for double line subtitle
          axis.title.x = element_blank(),
          legend.position = "none", 
-         #legend.position = c(0.65,0.75), 
          plot.margin = margin(5.5, 5.5, 5.5, 5.5),
          legend.background = element_blank(),
          legend.key = element_blank(), 
@@ -2874,15 +2790,8 @@ siteprop19_comboclimrest_plot <-
    ) +
    labs(x = "Reach elevation (m)",
         title = "19\u00B0C threshold",
-        # subtitle = paste0('Scenarios: Warming (+2\u00B0C air temp.); Dam (-1 ',
-        #                   'dam per 10km\u00b2); Shade (+10% shade)'),
         y = "Proportion of coldwater habitat\n(reach length gained [+] or lost [-])") 
 # siteprop19_comboclimrest_plot
-
-# ggsave(plot = siteprop19_comboclimrest_plot,
-#        filename = paste0("../figures/",
-#                          "FigureS3B_coldwaterhabitat_propreachkm_allscenariocurves_19C.png"),
-#        width = 6.5, height = 3.5, units = "in", dpi = 600)
 ```
 
 
@@ -2954,15 +2863,8 @@ siteprop20_comboclimrest_plot <-
          linewidth = guide_legend(ncol = 3, byrow = TRUE)) +
   labs(x = "Reach elevation (m)",
        title = "20\u00B0C threshold",
-       # caption = paste0('Scenarios: Warming (+2\u00B0C air temp.); Dam (-1 ',
-       #                  'dam per 10km\u00b2); Shade (+10% shade)'),
        y = "Proportion of coldwater habitat\n(reach length gained [+] or lost [-])") 
 # siteprop20_comboclimrest_plot
-
-# ggsave(plot = siteprop20_comboclimrest_plot,
-#        filename = paste0("../figures/",
-#                          "FigureS3C_coldwaterhabitat_propreachkm_allscenariocurves_20C.png"),
-#        width = 6.5, height = 5, units = "in", dpi = 600)
 ```
 
 
@@ -2986,11 +2888,11 @@ temp_threshold_propreachkm_panel
 
 
 ```{r}
-ggsave(plot = temp_threshold_propreachkm_panel,
-       filename = paste0("../figures/",
-                         "FigureS3_coldwaterhabitat_propreachkm_allscenariocurves_PANEL.png"),
-       width = 6.5, height = 10, units = "in", dpi = 600)
-
+# ggsave(plot = temp_threshold_propreachkm_panel,
+#        filename = paste0("../figures/",
+#                          "FigureS3_coldwaterhabitat_propreachkm_allscenariocurves_PANEL.png"),
+#        width = 6.5, height = 10, units = "in", dpi = 600)
+# 
 # ggsave(plot = siteprop20_comboclimrest_plot,
 #        filename = paste0("../figures/",
 #                          "FigureS3_coldwaterhabitat_propreachkm_allscenariocurves_PANEL.eps"),
@@ -3000,20 +2902,18 @@ ggsave(plot = temp_threshold_propreachkm_panel,
 
 
 
-## Fig S4. Observed data temporal availability  
+## Figure S4. Observed data temporal availability  
 
 ```{r warning=FALSE, message = FALSE}
 # number of unique sites for july data
 july_year_count_plot <- 
   obs_df |> st_drop_geometry() |>
-  # july_data00 |> 
   reframe(.by = stn_id_num, year_n = n()) |> 
   ggplot(aes(x = year_n)) +
   geom_density() + 
   theme_classic() +
   scale_x_continuous(n.breaks = 7) +
   labs(x = "Record length for a site (years)",
-       # title = "Observation sites by record length density", 
        y = "Site density")  
 
 # plot density of temperature data for years used in model fit
@@ -3022,26 +2922,24 @@ data_density_by_year_plot <-
   geom_density(aes(x = smpl_year)) + 
   theme_classic() +
   scale_x_continuous(n.breaks = 7) +
-  labs(x = "Year", 
-       # title = "Observation site records per year density",
-       y = "Site density")  
+  labs(x = "Year", y = "Site density")  
 
 (observation_data_panel_plot <-
-    cowplot::plot_grid(data_density_by_year_plot,july_year_count_plot,
+    cowplot::plot_grid(data_density_by_year_plot, july_year_count_plot,
                        nrow = 2,labels = c("A","B")) )
 
-ggsave(plot = observation_data_panel_plot, 
-       filename = "../figures/FigureS4_obs_data_panel_plot.png",
-       width = 6.5, height = 6.5, units = "in", dpi = 1200)
+# ggsave(plot = observation_data_panel_plot, 
+#        filename = "../figures/FigureS4_obs_data_panel_plot.png",
+#        width = 6.5, height = 6.5, units = "in", dpi = 1200)
 ```
 
 
-## Fig S5. Observed data correlation plot  
+## Figure S5. Observed data correlation plot  
 
 
 ```{r}
 corrplot_df <- obs_df |> st_drop_geometry() |>
-  select(ssnid, rid, stn_id_num, pid, smpl_year, starts_with("WT_"),
+  select(ssnid, stn_id_num, smpl_year, starts_with("WT_"),
          AreaKm2, dJLtavg, BFIc, CPY100x, v2elevm, NIDDENw)
 
 # function to plot correlation coefficients for FWS formatting/publication
@@ -3071,7 +2969,6 @@ corrplot <- corrplot_df |>
          " Riparian\ncanopy\ncover (%)",
          " Elevation\n(m)",
          " Dam\ndensity\n(dams/km\u00b2)" ),
-     # title = "Correlation Plot of Model Variables",
      upper = list(continuous = wrap(my_cor)),  # show correlation coefficients
      # scatterplots with smooth lines
      lower = list(continuous = GGally::wrap("smooth", colour = "grey40", 
@@ -3083,16 +2980,14 @@ corrplot
 
 
 ```{r message=FALSE, warning=FALSE}
-ggsave(corrplot, width = 7.5, height = 7.5, dpi = 1200, units = "in",
-       filename = "../figures/FigureS5_modelvariable_correlationpot.png")
+# ggsave(corrplot, width = 7.5, height = 7.5, dpi = 1200, units = "in",
+#        filename = "../figures/FigureS5_modelvariable_correlationpot.png")
 ```
 
 
 
-## Covariate Summary Statistics  
 
-
-### Fig S6. Covariate boxplots  
+## Figure S6. Covariate boxplots  
 
 ```{r}
 cov_df <- 
@@ -3124,7 +3019,6 @@ cov_df <-
 ```{r fig.width=6.5, fig.height=5, message = FALSE, warning = FALSE}
 (cov_summary_plot <- 
    ggplot(data = cov_df, aes(x = Covariate, fill = Data, y = value)) +
-   # geom_violin(quantiles = c(0.25,0.5,0.75)) +
    geom_boxplot(position = position_dodge(width = 1),
                 median.linewidth = 1) +
    stat_summary(fun = mean, geom = "crossbar", width = 0.7, size = 0.4,
@@ -3150,10 +3044,10 @@ cov_df <-
 ```
 
 ```{r message = FALSE, warning = FALSE}
-ggsave(plot = cov_summary_plot,
-       filename = "../figures/FigureS6_covariate_summary_boxplot.png",
-       width = 6.5,height = 5, dpi = 600, units = "in")
-
+# ggsave(plot = cov_summary_plot,
+#        filename = "../figures/FigureS6_covariate_summary_boxplot.png",
+#        width = 6.5,height = 5, dpi = 600, units = "in")
+# 
 # ggsave(plot = cov_summary_plot,
 #        filename = "../figures/FigureSXY_covariate_summary_boxplot.eps",
 #        device = cairo_ps,
@@ -3162,7 +3056,7 @@ ggsave(plot = cov_summary_plot,
 
 
 
-### Table S1. Covariate Summary Statistics Table  
+## Table S1. Covariate Summary Statistics Table  
 
 
 ```{r}
@@ -3238,8 +3132,8 @@ write_csv(cov_summary_df, "../tables/TableS1_covariate_summary_stats.csv")
 
 <br>  
 
-## Scenarios prediction maps  
 
+## Figure S7. Recent climate (1990-2022) temperature maps  
 
 ```{r fig.width = 6.5, fig.height=4.5}
 # generate standardized color palette
@@ -3249,7 +3143,6 @@ sc <- scale_colour_gradientn(colors = temp_palette(100),
                              limits=c(10, 36),
                              guide = guide_colorbar(
                                title = "Temperature (\u00B0C)",
-                               # position = "bottom",
                                direction = "horizontal",
                                title.position = "top",
                                label.position = "bottom",
@@ -3264,10 +3157,6 @@ sc <- scale_colour_gradientn(colors = temp_palette(100),
 main_map_scenario <- ggplot() +
   # Add the state boundary
   geom_sf(data = ma_state_boundary, fill = NA, color = "grey20", linewidth = 0.5) +
-  # add stream network with drainage area weighted linewidth 
-  # geom_sf(data = filter(ma_streams_sf, TotDASqKM < 2550 & Tw_rcnt < 34),
-  #         aes(linewidth = TotDASqKM) , color = "#A6CEE3", lineend = "round") + 
-  # scale_linewidth(range = c(0.1, 1.25)) +
   
   # add Connecticut and Merrimack Rivers
   geom_sf(data = filter(ma_streams_sf, TotDASqKM > 5000), 
@@ -3279,7 +3168,6 @@ main_map_scenario <- ggplot() +
   
   # add the observation sites
   geom_sf(data = obs_df, 
-          # fill = "grey80", shape = 21,
           color = "black", shape = 1,
           stroke = 0.2, size = 2) +
   
@@ -3296,7 +3184,6 @@ main_map_scenario <- ggplot() +
   annotation_scale(
     location = "tr",       # Bottom left location
     bar_cols = c("black", "white"),
-    # text_family = "Arial",
     width_hint = 0.18,      # Relative width of the scale bar (30% of map width)
     pad_y = unit(3, "cm")
   ) +
@@ -3304,7 +3191,6 @@ main_map_scenario <- ggplot() +
   # Set map coordinates
   coord_sf(crs = 3857) +
   theme_void() +
-  # sc +
   theme(axis.title = element_blank(), 
         legend.position = "inside", legend.position.inside = c(0.2,0.45), 
         legend.background = element_rect(fill = "white"),
@@ -3313,8 +3199,6 @@ main_map_scenario <- ggplot() +
 
 ```
 
-
-### Recent climate (1990-2022) maps 
 
 ```{r fig.width = 6.5, fig.height=5, warning=FALSE, message = FALSE}
 scenario_rcnt_ggplot <- 
@@ -3414,7 +3298,6 @@ scenario_damshade_ggplot <-
 #        width = 6.5,height = 5, dpi = 600, units = "in")
 ```
 
-#### Figure S7 Panel 
 
 ```{r fig.width = 13, fig.height=10, warning=FALSE, message = FALSE}
 recent_scenario_maps <- 
@@ -3426,14 +3309,14 @@ recent_scenario_maps <-
   theme(plot.background = element_rect(fill = "white",color = NA))
 recent_scenario_maps
 
-ggsave(plot = recent_scenario_maps, 
-       filename = "../figures/FigureS7_temp_maps_recent_climate.png",
-       width = 13, height = 10, dpi = 600, units = "in")
+# ggsave(plot = recent_scenario_maps, 
+#        filename = "../figures/FigureS7_temp_maps_recent_climate.png",
+#        width = 13, height = 10, dpi = 600, units = "in")
 ```
 
 
+## Figure S8. Future climate (+2\u00B0C air temp) temperature maps  
 
-### Future climate (+2\u00B0C air temp) maps 
 
 ```{r fig.width = 6.5, fig.height=5, warning=FALSE, message = FALSE}
 scenario_futr_ggplot <- 
@@ -3532,7 +3415,7 @@ scenario_futrdamshade_ggplot <-
 #        width = 6.5,height = 5, dpi = 600, units = "in")
 ```
 
-#### Figure S8 Panel  
+
 
 ```{r fig.width = 13, fig.height=10, warning=FALSE, message = FALSE}
 future_scenario_maps <- 
@@ -3544,7 +3427,7 @@ future_scenario_maps <-
   theme(plot.background = element_rect(fill = "white",color = NA))
 future_scenario_maps
 
-ggsave(plot = future_scenario_maps, 
-       filename = "../figures/FigureS8_temp_maps_future_climate.png",
-       width = 13, height = 10, dpi = 600, units = "in")
+# ggsave(plot = future_scenario_maps, 
+#        filename = "../figures/FigureS8_temp_maps_future_climate.png",
+#        width = 13, height = 10, dpi = 600, units = "in")
 ```

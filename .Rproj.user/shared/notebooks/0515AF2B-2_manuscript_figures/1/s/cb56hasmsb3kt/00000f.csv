@@ -1,8 +1,0 @@
-"0","future_scenario_maps <- "
-"0","  cowplot::plot_grid(scenario_futr_ggplot, scenario_futrdam_ggplot, "
-"0","                     scenario_futrshade_ggplot, scenario_futrdamshade_ggplot,"
-"0","                     labels = c(""A"",""B"",""C"",""D""), "
-"0","                     nrow = 2, ncol = 2,"
-"0","                     label_x = -0.001) + "
-"0","  theme(plot.background = element_rect(fill = ""white"",color = NA))"
-"0","future_scenario_maps"

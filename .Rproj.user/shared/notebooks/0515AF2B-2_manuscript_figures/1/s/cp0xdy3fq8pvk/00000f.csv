@@ -1,8 +1,0 @@
-"0","ggsave(plot = cov_summary_plot,"
-"0","       filename = ""../figures/FigureS6_covariate_summary_boxplot.png"","
-"0","       width = 6.5,height = 5, dpi = 600, units = ""in"")"
-"0",""
-"0","# ggsave(plot = cov_summary_plot,"
-"0","#        filename = ""../figures/FigureSXY_covariate_summary_boxplot.eps"","
-"0","#        device = cairo_ps,"
-"0","#        width = 6.5,height = 5, dpi = 600, units = ""in"")"

@@ -1,0 +1,154 @@
+---
+title: "Part 1: SSN object development"
+author: "Matt Fuller"
+date: "2026-09-09"
+output:
+  html_document:
+    toc: true
+    number_sections: true
+    toc_float: true
+    toc_depth: 3
+    code_folding: hide
+  pdf_document:
+    toc: true
+    toc_depth: '3'
+---
+
+```{r setup, include=FALSE}
+library(sf)
+library(SSNbler)
+library(SSN2)
+library(tidyverse)
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Read in the necessary input data files.  
+
+```{r}
+sites_sf <- readRDS("../data/obs_df_MA_SSN.RDS")
+preds_sf <- readRDS("../data/preds_df_MA_SSN.RDS") 
+edges_sf <- readRDS("../data/edges_df_MA_SSN.RDS")
+```
+
+LSN build. 
+
+```{r}
+edges <-  lines_to_lsn(
+  streams = edges_sf,
+  lsn_path = "../ssn_obj/",
+  check_topology = TRUE,
+  snap_tolerance = 0.05,
+  topo_tolerance = 20,
+  overwrite = TRUE
+)
+```
+
+Add observation sites to LSN.  
+
+```{r}
+obs <- sites_to_lsn(
+  sites = sites_sf,
+  edges = edges,
+  lsn_path = "../ssn_obj/",
+  file_name = "obs",
+  snap_tolerance = 10,
+  save_local = TRUE,
+  overwrite = TRUE
+)
+```
+
+aAdd prediction sites to LSN.  
+
+```{r}
+preds <- sites_to_lsn(
+  sites = preds_sf,
+  edges = edges,
+  save_local = TRUE,
+  lsn_path = "../ssn_obj/",
+  file_name = "preds.gpkg",
+  snap_tolerance = 10,
+  overwrite = TRUE
+)
+```
+
+Calculate upstream distance along edges.  
+
+```{r}
+edges <- updist_edges(
+  edges = edges,
+  save_local = TRUE,
+  lsn_path = "../ssn_obj/",
+  calc_length = TRUE
+)
+
+names(edges) ## View edges column names
+```
+
+Calculate upstream distance for observation and prediction sites.  
+
+```{r}
+site.list <- updist_sites(
+  sites = list(
+    obs = obs,
+    preds = preds
+  ),
+  edges = edges,
+  length_col = "Length",
+  save_local = TRUE,
+  lsn_path = "../ssn_obj/"
+)
+
+names(site.list) ## View output site.list names
+```
+
+Calculate the additive function value for tributary convergence.  
+
+```{r}
+edges <- afv_edges(
+  edges = edges,
+  infl_col = "TotAreaKm2",
+  segpi_col = "areaPI",
+  afv_col = "afvArea",
+  lsn_path = "../ssn_obj/"
+)
+```
+
+Calculate the additive function values for each site along the stream reaches.  
+
+```{r}
+site.list <- afv_sites(
+  sites = site.list,
+  edges = edges,
+  afv_col = "afvArea",
+  save_local = TRUE,
+  lsn_path = "../ssn_obj/"
+)
+```
+
+
+Assemble the final SSN object.  
+
+```{r}
+MA_ssn <- ssn_assemble(
+  edges = edges,
+  lsn_path = "../ssn_obj/",
+  obs_sites = site.list$obs,
+  preds_list = site.list[c("preds")],
+  ssn_path = "../ssn_obj/MA_SSN.ssn",
+  import = TRUE,
+  check = TRUE,
+  afv_col = "afvArea",
+  overwrite = TRUE
+)
+```
+
+Create the distance matrices for the SSN object.  
+
+```{r}
+ssn_create_distmat(MA_ssn,
+                   predpts = "preds",
+                   overwrite = TRUE,
+                   among_predpts = TRUE)
+```

@@ -1,4 +1,0 @@
-"0",""
-"0","ggsave(plot = observation_data_panel_plot, "
-"0","       filename = ""../figures/FigureS4_obs_data_panel_plot.png"","
-"0","       width = 6.5, height = 6.5, units = ""in"", dpi = 1200)"

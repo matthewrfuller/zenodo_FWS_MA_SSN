@@ -1,0 +1,13 @@
+Covariate,units,Data,min,q1,mean,median,q3,max
+Drainage Area,km²,Observation sites,0.32,4.60,54.90,20.02,67.45,999.18
+Drainage Area,km²,Prediction sites,0.00,1.90,117.96,6.40,26.26,10181.88
+Baseflow Index (BFI),unitless (0-100),Observation sites,43.00,47.49,50.50,49.52,53.58,66.30
+Baseflow Index (BFI),unitless (0-100),Prediction sites,41.00,49.00,51.91,53.00,54.64,69.58
+Canopy cover,%,Observation sites,32.38,59.52,69.36,71.10,78.73,88.20
+Canopy cover,%,Prediction sites,0.00,51.17,58.68,60.75,70.47,89.71
+Mean July air temperature,°C,Observation sites,17.76,20.91,22.07,21.92,23.43,24.95
+Mean July air temperature,°C,Prediction sites,17.46,21.37,21.92,22.21,22.70,23.33
+Dam density,dams per km²,Observation sites,0.00,0.00,0.06,0.05,0.09,0.30
+Dam density,dams per km²,Prediction sites,0.00,0.00,0.09,0.00,0.10,21.79
+Elevation,meters,Observation sites,2.73,47.94,164.55,143.12,276.44,604.31
+Elevation,meters,Prediction sites,-0.45,35.32,143.90,90.60,228.80,731.56

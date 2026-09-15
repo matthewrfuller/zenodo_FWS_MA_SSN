@@ -1,13 +1,13 @@
 {
     "sortOrder": [
         {
-            "columnIndex": 3,
-            "ascending": false
-        },
-        {
             "columnIndex": 2,
             "ascending": true
+        },
+        {
+            "columnIndex": 3,
+            "ascending": false
         }
     ],
-    "path": "D:/Rprojects/Zenodo/zenodo_FWS_MA_SSN"
+    "path": "D:/Rprojects/Zenodo/zenodo_FWS_MA_SSN/predictions"
 }

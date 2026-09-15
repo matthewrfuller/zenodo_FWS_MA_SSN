@@ -1,13 +1,23 @@
 ---
-title: 'Part 1: Model Fit and Diagnostics'
+title: 'Part 2: Model Fit and Diagnostics'
 author: "Matt Fuller"
 date: "2026-09-09"
-output: html_document
+output:
+  html_document:
+    toc: true
+    number_sections: true
+    toc_float: true
+    toc_depth: 3
+    code_folding: hide
+  pdf_document:
+    toc: true
+    toc_depth: '3'
 ---
 
 # Analysis preparation  
 
 ```{r setup, include=FALSE}
+library(sf)
 library(SSN2)
 library(tidyverse)
 
@@ -23,34 +33,31 @@ knitr::opts_chunk$set(echo = TRUE)
 ## Read in SSN object and distance matrices(.ssn)  
 
 ```{r}
-# Read in the SSN object and prediction sites contained in the "preds10288" 
+# Read in the SSN object and prediction sites contained in the "preds" 
 # predictions slot of the SSN object. (< 1 min to load)
-ssn_obj <- ssn_import(path = "../ssnobj/MASSN_july_standardized.ssn/", 
+ssn_obj <- ssn_import(path = "../ssn_obj/MA_SSN.ssn/", 
                       overwrite = TRUE, 
-                      predpts = "preds10288.shp")
+                      predpts = "preds")
 ```
 
-## Make final adjustments to SSN object     
+## Make final adjustments to SSN object  
 
 ```{r}
 # Observation site data updates
 obs_df <- ssn_get_data(ssn_obj, "obs") |>
   mutate(yearf = factor(yearf),
          stn_id = factor(stn_id))
-saveRDS(obs_df, "../data/obs_df_MA_SSN.RDS")
 
 ssn_obj <- ssn_put_data(obs_df, ssn_obj, "obs")
 
 # Prediction site data updates
-preds_df <- ssn_get_data(ssn_obj, "preds10288") |>
+preds_df <- ssn_get_data(ssn_obj, "preds") |>
   mutate(yearf = factor("0"),
-         stn_id = factor(stn_id))
-saveRDS(preds_df, "../data/preds_df_MA_SSN.RDS")
+         stn_id = factor(stn_id)) 
 
-ssn_obj <- ssn_put_data(preds_df, ssn_obj, "preds10288")
+ssn_obj <- ssn_put_data(preds_df, ssn_obj, "preds")
 
-# save flowlines from ssn object if desired
-saveRDS(object = ssn_obj$edges, file = "../data/ssnobj_edges.RDS")
+saveRDS(ssn_obj$edges, file = "../data/ssn_obj_edges.RDS")
 ```
 
 # Fit the SSN model  
@@ -74,8 +81,10 @@ fit99 <- ssn_lm(
 ```{r}
 fit_esttab <- tidy(fit99) 
 
-# reload the continuous variables from the obs data to make back transformations
-cont_cov_data <- readRDS(file = "../data/continuous_obs_vars.RDS")
+# grab the continuous variables from the obs data to make back transformations
+cont_cov_data <- 
+  select(obs_df, AreaKm2, NIDDENw, BFIc, dJLtavg, CPY100x, v2elevm) |>
+  st_drop_geometry()
 
 # generate the estimate table with raw units coefficients 
 estimate_table <-
@@ -89,7 +98,7 @@ write_csv(esttab_cooling_df, file = "../tables/Table2_estimate_table.csv")
 
 # Cross validation  
 
-```{r}
+```{r warning=FALSE}
 # k-fold cross validation for the fitted SSN model to assess predictive performance
 k10foldoutput <- SSNkfoldcv(fit99, kfoldn = 10, clustern = 10)
 write_csv(x = k10foldoutput, file = "../tables/k10foldcv_table.csv")
@@ -113,39 +122,63 @@ plot(fit99, which = 3)
 plot(fit99, which = 4)
 plot(fit99, which = 5)
 plot(fit99, which = 6)
+```
 
+```{r}
 fit99_aug <- augment(fit99)
 
 (fit99_obspres_plot <- 
-    ggplot(data = fit99_aug, aes(x = WT_avg, 
-                                 size = sNIDDENw*100,
-                                 # size = sv2elevm*100,
-                                 # size = sAreaKm2*100,
-                                 # size = sdJLtavg*100,
-                                 # size = sBFIc*100,
-                                 # size = sCPY100x,
-                                 y = .fitted)) + 
-    geom_abline(yintercept = 0, slope = 1) +
+    ggplot(data = fit99_aug, aes(x = WT_avg, y = .fitted)) + 
+    geom_abline(intercept = 0, slope = 1) +
     geom_point(alpha = 0.5) +
     geom_smooth(method = "lm", formula = y ~ x) +
-    theme_bw()
+    theme_bw() +
+    labs(title = "Observed vs Fitted", x = "Observed", y = "Fitted")
 )
-
-
-ggplot() +
-  geom_sf(data = 
-            filter(fit99_aug, .std.resid < 0 & .std.resid > -4), 
-            # filter(fit99_aug, .std.resid > 0 & .std.resid < 4), 
-          
-          aes(
-            size = .std.resid*-1
-            # color = .std.resid
-            ), 
-          # size = 3,
-          alpha = 0.3) +
-  # scale_color_viridis_c(limits = c(-4, 4), option = "H") +
-  theme_bw()
 ```
+
+
+```{r fig.height = 8, fig.width=6.5}
+ma_state_boundary <- 
+  rnaturalearth::ne_states(country = c("United States of America"), 
+                           returnclass = "sf") |>
+  filter(name == "Massachusetts")
+
+stdresiduals_neg <- ggplot() +
+  # Add the state boundary
+  geom_sf(data = ma_state_boundary, fill = NA, color = "grey20", linewidth = 0.5) +
+  geom_sf(data = filter(fit99_aug, .std.resid <= 0) |> arrange(.std.resid), 
+          aes(size = abs(.std.resid), color = .std.resid), 
+          alpha = 0.3) +
+  scale_color_distiller(palette = "RdBu",
+    type = "div",
+    direction = -1,                 # blue = low, red = high
+    limits = c(-4, 4),
+    name = "Standardized\nresiduals") +
+  theme_minimal() +
+  labs(title = "Negative standardized residuals", size = "Standardized\nresiduals")
+
+stdresiduals_pos <- ggplot() +
+  # Add the state boundary
+  geom_sf(data = ma_state_boundary, fill = NA, color = "grey20", linewidth = 0.5) +
+  geom_sf(data = filter(fit99_aug, .std.resid >= 0) |> arrange(desc(.std.resid)),
+          aes(size = abs(.std.resid), color = .std.resid), 
+          alpha = 0.3) +
+  scale_color_distiller(palette = "RdBu",
+    type = "div",
+    direction = -1,                 # blue = low, red = high
+    limits = c(-4, 4),
+    name = "Standardized\nresiduals") +
+  theme_minimal() +
+  labs(title = "Positive standardized residuals", size = "Standardized\nresiduals")
+
+cowplot::plot_grid(stdresiduals_pos, 
+                   stdresiduals_neg + theme(legend.position = "none"),
+                   nrow = 2,
+                   align = "hv",
+                   labels = c("A", "B"))
+```
+
 
 
 ```{r}
@@ -167,8 +200,9 @@ plot(tg)
 
 ```{r}
 # make predictions for scenario
-augm_rcnt <- augment(x = fit99, newdata = "preds10288")
-summary(augm_rcnt$.fitted)
+augm_rcnt <- augment(x = fit99, newdata = "preds") |>
+  left_join(select(ssn_obj$edges, rid, Shape_Leng) |> sf::st_drop_geometry(), 
+            by = "rid")
 saveRDS(augm_rcnt, file = "../predictions/augm_rcnt.RDS")
 ```
 
@@ -176,47 +210,53 @@ saveRDS(augm_rcnt, file = "../predictions/augm_rcnt.RDS")
 ### + Dam removal  
 
 ```{r}
-# pull prediction data and make the update with 2C warming field
-fit99preds_rcntdam <- ssn_get_data(fit99, name = "preds10288") |>
+# pull prediction data and make the update with dam removal from 'sdam1'
+fit99preds_rcntdam <- ssn_get_data(fit99, name = "preds") |>
   mutate(sNIDDENw = sdam1)
 
 # put the updated air temp data back into the model object and rename it
-fit99_rcntdam <- ssn_put_data(fit99preds_rcntdam, fit99, name = "preds10288")
+fit99_rcntdam <- ssn_put_data(fit99preds_rcntdam, fit99, name = "preds")
 
 # run predictions via augment() with the new model data
-augm_rcntdam <- augment(x = fit99_rcntdam, newdata = "preds10288")
+augm_rcntdam <- augment(x = fit99_rcntdam, newdata = "preds") |>
+  left_join(select(ssn_obj$edges, rid, Shape_Leng) |> sf::st_drop_geometry(), 
+            by = "rid")
 saveRDS(augm_rcntdam, file = "../predictions/augm_rcntdam.RDS")
 ```
 
 ### + Shade restoration  
 
 ```{r}
-# pull prediction data and make the update with 2C warming field
-fit99preds_rcntshade <- ssn_get_data(fit99, name = "preds10288") |>
+# pull prediction data and make the update with shade restoration from sCPYadd10
+fit99preds_rcntshade <- ssn_get_data(fit99, name = "preds") |>
   mutate(sCPY100x = sCPYadd10)
 
 # put the updated air temp data back into the model object and rename it
-fit99_rcntshade <- ssn_put_data(fit99preds_rcntshade, fit99, name = "preds10288")
+fit99_rcntshade <- ssn_put_data(fit99preds_rcntshade, fit99, name = "preds")
 
 # run predictions via augment() with the new model data
-augm_rcntshade <- augment(x = fit99_rcntshade, newdata = "preds10288")
+augm_rcntshade <- augment(x = fit99_rcntshade, newdata = "preds") |>
+  left_join(select(ssn_obj$edges, rid, Shape_Leng) |> sf::st_drop_geometry(), 
+            by = "rid")
 saveRDS(augm_rcntshade, file = "../predictions/augm_rcntshade.RDS")
 ```
 
 ### + Dam removal + shade restoration  
 
 ```{r}
-# pull prediction data and make the update with 2C warming field
-fit99preds_rcntdamshade <- ssn_get_data(fit99, name = "preds10288") |>
+# pull prediction data and make the update with dam and shade restorations
+fit99preds_rcntdamshade <- ssn_get_data(fit99, name = "preds") |>
   mutate(sNIDDENw = sdam1,
          sCPY100x = sCPYadd10)
 
 
 # put the updated air temp data back into the model object and rename it
-fit99_rcntdamshade <- ssn_put_data(fit99preds_rcntdamshade, fit99, name = "preds10288")
+fit99_rcntdamshade <- ssn_put_data(fit99preds_rcntdamshade, fit99, name = "preds")
 
 # run predictions via augment() with the new model data
-augm_rcntdamshade <- augment(x = fit99_rcntdamshade, newdata = "preds10288")
+augm_rcntdamshade <- augment(x = fit99_rcntdamshade, newdata = "preds") |>
+  left_join(select(ssn_obj$edges, rid, Shape_Leng) |> sf::st_drop_geometry(), 
+            by = "rid")
 saveRDS(augm_rcntdamshade, file = "../predictions/augm_rcntdamshade.RDS")
 ```
 
@@ -231,14 +271,16 @@ saveRDS(augm_rcntdamshade, file = "../predictions/augm_rcntdamshade.RDS")
 # Scenario: Future climate (+2degC air temp) warming                        ####
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # pull prediction data and make the update with 2C warming field
-fit99preds_futr <- ssn_get_data(fit99, name = "preds10288") |>
+fit99preds_futr <- ssn_get_data(fit99, name = "preds") |>
   mutate(sdJLtavg = sATJL2C)
 
 # put the updated air temp data back into the model object and rename it
-fit99_futr <- ssn_put_data(fit99preds_futr, fit99, name = "preds10288")
+fit99_futr <- ssn_put_data(fit99preds_futr, fit99, name = "preds")
 
 # run predictions via augment() with the new model data
-augm_futr <- augment(x = fit99_futr, newdata = "preds10288")
+augm_futr <- augment(x = fit99_futr, newdata = "preds") |>
+  left_join(select(ssn_obj$edges, rid, Shape_Leng) |> sf::st_drop_geometry(), 
+            by = "rid")
 saveRDS(augm_futr, file = "../predictions/augm_futr.RDS")
 ```
 
@@ -246,52 +288,58 @@ saveRDS(augm_futr, file = "../predictions/augm_futr.RDS")
 ### + Dam removal  
 
 ```{r}
-# pull prediction data and make the update with 2C warming field
-fit99preds_futrdam <- ssn_get_data(fit99, name = "preds10288") |>
+# pull prediction data and make the update with 2C warming and dam removal
+fit99preds_futrdam <- ssn_get_data(fit99, name = "preds") |>
   mutate(sNIDDENw = sdam1,
          sdJLtavg = sATJL2C)
 
 
 # put the updated air temp data back into the model object and rename it
-fit99_futrdam <- ssn_put_data(fit99preds_futrdam, fit99, name = "preds10288")
+fit99_futrdam <- ssn_put_data(fit99preds_futrdam, fit99, name = "preds")
 
 # run predictions via augment() with the new model data
-augm_futrdam <- augment(x = fit99_futrdam, newdata = "preds10288")
+augm_futrdam <- augment(x = fit99_futrdam, newdata = "preds") |>
+  left_join(select(ssn_obj$edges, rid, Shape_Leng) |> sf::st_drop_geometry(), 
+            by = "rid")
 saveRDS(augm_futrdam, file = "../predictions/augm_futrdam.RDS")
 ```
 
-### + Shade restoration  ### Future climate + shade restoration  
+### + Shade restoration  
 
 ```{r}
-# pull prediction data and make the update with 2C warming field
-fit99preds_futrshade <- ssn_get_data(fit99, name = "preds10288") |>
+# pull prediction data and make the update with 2C warming and shade restoration
+fit99preds_futrshade <- ssn_get_data(fit99, name = "preds") |>
   mutate(sCPY100x = sCPYadd10,
          sdJLtavg = sATJL2C)
 
 
 # put the updated air temp data back into the model object and rename it
-fit99_futrshade <- ssn_put_data(fit99preds_futrshade, fit99, name = "preds10288")
+fit99_futrshade <- ssn_put_data(fit99preds_futrshade, fit99, name = "preds")
 
 # run predictions via augment() with the new model data
-augm_futrshade <- augment(x = fit99_futrshade, newdata = "preds10288")
+augm_futrshade <- augment(x = fit99_futrshade, newdata = "preds") |>
+  left_join(select(ssn_obj$edges, rid, Shape_Leng) |> sf::st_drop_geometry(), 
+            by = "rid")
 saveRDS(augm_futrshade, file = "../predictions/augm_futrshade.RDS")
 ```
 
 ### + Dam removal + shade restoration  
 
 ```{r}
-# pull prediction data and make the update with 2C warming field
-fit99preds_futrdamshade <- ssn_get_data(fit99, name = "preds10288") |>
+# pull prediction data and make the update with 2C warming, dam, and shade 
+fit99preds_futrdamshade <- ssn_get_data(fit99, name = "preds") |>
   mutate(sNIDDENw = sdam1,
          sCPY100x = sCPYadd10,
          sdJLtavg = sATJL2C)
 
 
 # put the updated air temp data back into the model object and rename it
-fit99_futrdamshade <- ssn_put_data(fit99preds_futrdamshade, fit99, name = "preds10288")
+fit99_futrdamshade <- ssn_put_data(fit99preds_futrdamshade, fit99, name = "preds")
 
 # run predictions via augment() with the new model data
-augm_futrdamshade <- augment(x = fit99_futrdamshade, newdata = "preds10288")
+augm_futrdamshade <- augment(x = fit99_futrdamshade, newdata = "preds") |>
+  left_join(select(ssn_obj$edges, rid, Shape_Leng) |> sf::st_drop_geometry(), 
+            by = "rid")
 saveRDS(augm_futrdamshade, file = "../predictions/augm_futrdamshade.RDS")
 ```
 
